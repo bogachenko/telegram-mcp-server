@@ -237,7 +237,6 @@ func syncOneSource(
 
 	if maxID == 0 {
 		result.LatestMessageID = currentState.LastMessageID
-		result.StateAdvanced = true
 	}
 
 	applyLinkedCommentSync(ctx, api, resolved, source, repos, limit, backfill, &result)
@@ -397,7 +396,6 @@ func syncLinkedComments(
 
 	if maxID == 0 {
 		result.latestCommentID = currentState.LastCommentMessageID
-		result.stateAdvanced = true
 	}
 
 	return result
