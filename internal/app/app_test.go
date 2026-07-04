@@ -10,11 +10,15 @@ import (
 
 func TestPrintStatus(t *testing.T) {
 	application := New(config.Config{
-		DataDir:            "data",
-		DatabasePath:       "data/telegram-mcp.sqlite",
-		TelegramSessionDir: "data/session",
-		ListenAddr:         "127.0.0.1:1984",
-		PublicBaseURL:      "https://tg-mcp.elektrosila-avtomatika.store",
+		DataDir:             "data",
+		DatabasePath:        "data/telegram-mcp.sqlite",
+		TelegramSessionDir:  "data/session",
+		TelegramSessionPath: "data/session/session.json",
+		TelegramAPIID:       123,
+		TelegramAPIHash:     "hash",
+		TelegramPhone:       "+10000000000",
+		ListenAddr:          "127.0.0.1:1984",
+		PublicBaseURL:       "https://tg-mcp.elektrosila-avtomatika.store",
 	})
 
 	var output bytes.Buffer
@@ -28,6 +32,9 @@ func TestPrintStatus(t *testing.T) {
 		"data dir: data",
 		"database path: data/telegram-mcp.sqlite",
 		"telegram session dir: data/session",
+		"telegram session path: data/session/session.json",
+		"telegram api configured: true",
+		"telegram phone configured: true",
 		"listen addr: 127.0.0.1:1984",
 		"public base URL: https://tg-mcp.elektrosila-avtomatika.store",
 		"mcp endpoint: /mcp",
@@ -46,6 +53,16 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	if !strings.Contains(err.Error(), `unknown command "bad"`) {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestRunWithIORejectsNilStdout(t *testing.T) {
+	err := RunWithIO([]string{"status"}, strings.NewReader(""), nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "stdout writer is required") {
 		t.Fatalf("error = %q", err)
 	}
 }

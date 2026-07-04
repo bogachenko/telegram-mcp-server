@@ -43,3 +43,37 @@ go run ./cmd/telegram-mcp status
 - `telegram.spam_add_from_message`
 - `telegram.spam_remove_sender`
 - `telegram.spam_list_senders`
+
+## Telegram MTProto auth
+
+Create a Telegram app at `my.telegram.org` and set:
+
+```bash
+export TGMCP_TELEGRAM_API_ID="123456"
+export TGMCP_TELEGRAM_API_HASH="your_app_hash"
+export TGMCP_TELEGRAM_PHONE="+10000000000"
+```
+
+If the Telegram account has two-step verification enabled, also set:
+
+```bash
+export TGMCP_TELEGRAM_PASSWORD="your_2fa_password"
+```
+
+Authorize the local user-client session:
+
+```bash
+go run ./cmd/telegram-mcp telegram-auth
+```
+
+Check saved session:
+
+```bash
+go run ./cmd/telegram-mcp telegram-me
+```
+
+The default session file is:
+
+```text
+data/session/session.json
+```
