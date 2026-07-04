@@ -224,12 +224,20 @@ func (a *App) Serve(ctx context.Context, stdout io.Writer) error {
 	messageRepo := messages.NewRepository(db)
 	exclusionRepo := exclusions.NewRepository(db)
 	exclusionService := exclusions.NewService(exclusionRepo, messageRepo)
+	stateRepo := state.NewRepository(db)
+	telegramClient := tgclient.NewClient(tgclient.Config{
+		APIID:       a.config.TelegramAPIID,
+		APIHash:     a.config.TelegramAPIHash,
+		SessionPath: a.config.TelegramSessionPath,
+	})
 
 	handler := mcp.NewHTTPHandler(mcp.ServerDeps{
 		Sources:          sourceRepo,
 		Messages:         messageRepo,
 		Exclusions:       exclusionRepo,
 		ExclusionService: exclusionService,
+		States:           stateRepo,
+		Telegram:         telegramClient,
 	})
 
 	server := &http.Server{

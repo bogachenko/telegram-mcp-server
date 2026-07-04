@@ -159,3 +159,25 @@ Remove a source and its local state/messages/source-scoped exclusions:
 ```bash
 go run ./cmd/telegram-mcp source-remove --id sellerproof_news --purge
 ```
+
+## MCP sync
+
+The MCP tool `telegram.sync` now runs the same MTProto sync logic as the CLI.
+
+Example MCP input:
+
+```json
+{
+  "source_id": "mpwb_chat",
+  "limit": 200
+}
+```
+
+Manual backfill through MCP:
+
+```json
+{
+  "source_id": "mpwb_chat",
+  "backfill": 20
+}
+```

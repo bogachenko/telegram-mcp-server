@@ -11,6 +11,8 @@ import (
 	"github.com/bogachenko/telegram-mcp-server/internal/exclusions"
 	"github.com/bogachenko/telegram-mcp-server/internal/messages"
 	"github.com/bogachenko/telegram-mcp-server/internal/sources"
+	"github.com/bogachenko/telegram-mcp-server/internal/state"
+	tgclient "github.com/bogachenko/telegram-mcp-server/internal/telegram"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -20,6 +22,8 @@ type ServerDeps struct {
 	Messages         *messages.Repository
 	Exclusions       *exclusions.Repository
 	ExclusionService *exclusions.Service
+	States           *state.Repository
+	Telegram         *tgclient.Client
 }
 
 // NewHTTPHandler builds the Streamable HTTP MCP handler.
@@ -107,7 +111,11 @@ type spamRemoveSenderInput struct {
 	SourceID  string `json:"source_id,omitempty" jsonschema:"Source id for source-scoped exclusion"`
 }
 
-type syncInput struct{}
+type syncInput struct {
+	SourceID string `json:"source_id,omitempty" jsonschema:"Optional source id filter"`
+	Limit    int    `json:"limit,omitempty" jsonschema:"Maximum new messages per source, default 200, maximum 1000"`
+	Backfill int    `json:"backfill,omitempty" jsonschema:"Save latest N messages even if source has no state"`
+}
 
 func registerTools(server *mcpsdk.Server, deps ServerDeps) {
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
@@ -261,11 +269,102 @@ func registerTools(server *mcpsdk.Server, deps ServerDeps) {
 		Name:        "telegram.sync",
 		Description: "Sync new messages from configured Telegram sources.",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, input *syncInput) (*mcpsdk.CallToolResult, any, error) {
-		return nil, map[string]any{
-			"ok":      false,
-			"pending": "telegram MTProto scanner stage is not implemented yet",
-		}, nil
+		if input == nil {
+			input = &syncInput{}
+		}
+		if deps.Telegram == nil {
+			return nil, nil, fmt.Errorf("telegram client is required")
+		}
+		if deps.States == nil {
+			return nil, nil, fmt.Errorf("state repository is required")
+		}
+
+		sourceID := strings.TrimSpace(input.SourceID)
+		sources, err := deps.Sources.List(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		selected := filterEnabledSources(sources, sourceID)
+		if len(selected) == 0 {
+			if sourceID != "" {
+				return nil, nil, fmt.Errorf("source %q not found", sourceID)
+			}
+			return nil, map[string]any{"results": []map[string]any{}, "message": "no enabled sources configured"}, nil
+		}
+
+		results, err := deps.Telegram.SyncSources(ctx, selected, tgclient.SyncRepos{
+			States:     deps.States,
+			Messages:   deps.Messages,
+			Exclusions: deps.ExclusionService,
+		}, tgclient.SyncOptions{
+			SourceID: sourceID,
+			Limit:    input.Limit,
+			Backfill: input.Backfill,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return nil, map[string]any{"results": mapSyncResults(results)}, nil
 	})
+}
+
+func filterEnabledSources(items []domain.Source, sourceID string) []domain.Source {
+	result := make([]domain.Source, 0, len(items))
+	for _, item := range items {
+		if !item.Enabled {
+			continue
+		}
+		if sourceID != "" && item.ID != sourceID {
+			continue
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+func mapSyncResults(items []tgclient.SourceSyncResult) []map[string]any {
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, mapSyncResult(item))
+	}
+	return result
+}
+
+func mapSyncResult(item tgclient.SourceSyncResult) map[string]any {
+	status := "synced"
+	switch {
+	case item.Baselined:
+		status = "baselined"
+	case item.Backfilled:
+		status = "backfilled"
+	case item.Truncated:
+		status = "truncated"
+	}
+
+	return map[string]any{
+		"source":            mapSource(item.Source),
+		"resolved":          mapResolvedPeer(item.Resolved),
+		"status":            status,
+		"latest_message_id": item.LatestMessageID,
+		"saved_messages":    item.SavedMessages,
+		"skipped_excluded":  item.SkippedExcluded,
+		"baselined":         item.Baselined,
+		"backfilled":        item.Backfilled,
+		"truncated":         item.Truncated,
+		"state_advanced":    item.StateAdvanced,
+		"error":             item.Error,
+	}
+}
+
+func mapResolvedPeer(item tgclient.ResolvedPeer) map[string]any {
+	return map[string]any{
+		"id":       item.ID,
+		"tdlib_id": item.TDLibID,
+		"name":     item.Name,
+		"username": item.Username,
+	}
 }
 
 func parseScope(value string) domain.ExclusionScope {
