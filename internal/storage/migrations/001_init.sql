@@ -62,12 +62,25 @@ CREATE TABLE IF NOT EXISTS excluded_senders (
     source_id TEXT,
 
     created_at TEXT NOT NULL,
-    created_by TEXT,
-
-    UNIQUE(sender_id, scope_type, source_id),
-    UNIQUE(username_normalized, scope_type, source_id)
+    created_by TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_excluded_senders_sender_id ON excluded_senders(sender_id);
 CREATE INDEX IF NOT EXISTS idx_excluded_senders_username ON excluded_senders(username_normalized);
 CREATE INDEX IF NOT EXISTS idx_excluded_senders_scope ON excluded_senders(scope_type, source_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_excluded_senders_sender_global
+    ON excluded_senders(sender_id)
+    WHERE sender_id IS NOT NULL AND scope_type = 'global';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_excluded_senders_username_global
+    ON excluded_senders(username_normalized)
+    WHERE username_normalized IS NOT NULL AND scope_type = 'global';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_excluded_senders_sender_source
+    ON excluded_senders(sender_id, source_id)
+    WHERE sender_id IS NOT NULL AND scope_type = 'source';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_excluded_senders_username_source
+    ON excluded_senders(username_normalized, source_id)
+    WHERE username_normalized IS NOT NULL AND scope_type = 'source';
