@@ -17,6 +17,7 @@ import (
 	"github.com/bogachenko/telegram-mcp-server/internal/mcp"
 	"github.com/bogachenko/telegram-mcp-server/internal/messages"
 	"github.com/bogachenko/telegram-mcp-server/internal/sources"
+	"github.com/bogachenko/telegram-mcp-server/internal/state"
 	"github.com/bogachenko/telegram-mcp-server/internal/storage"
 	tgclient "github.com/bogachenko/telegram-mcp-server/internal/telegram"
 )
@@ -109,6 +110,21 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer) error {
 			return err
 		}
 		return application.TelegramDryRun(context.Background(), stdout, *limit, strings.TrimSpace(*sourceID))
+
+	case "telegram-sync":
+		fs := flag.NewFlagSet("telegram-sync", flag.ContinueOnError)
+		fs.SetOutput(stdout)
+		limit := fs.Int("limit", 200, "maximum new messages per source, max 1000")
+		backfill := fs.Int("backfill", 0, "save latest N messages even if source has no state")
+		sourceID := fs.String("source", "", "optional source id filter")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return application.TelegramSync(context.Background(), stdout, tgclient.SyncOptions{
+			SourceID: strings.TrimSpace(*sourceID),
+			Limit:    *limit,
+			Backfill: *backfill,
+		})
 
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
@@ -406,6 +422,90 @@ func (a *App) TelegramDryRun(ctx context.Context, stdout io.Writer, limit int, s
 			if err != nil {
 				return fmt.Errorf("write dry-run message: %w", err)
 			}
+		}
+	}
+
+	return nil
+}
+
+// TelegramSync resolves sources, applies baseline/backfill rules and saves new messages.
+func (a *App) TelegramSync(ctx context.Context, stdout io.Writer, options tgclient.SyncOptions) error {
+	if a == nil {
+		return fmt.Errorf("app is required")
+	}
+	if stdout == nil {
+		return fmt.Errorf("stdout writer is required")
+	}
+
+	db, err := a.openStorage(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	allSources, err := sources.NewRepository(db).List(ctx)
+	if err != nil {
+		return err
+	}
+
+	selected := filterSources(allSources, options.SourceID)
+	if len(selected) == 0 {
+		if options.SourceID != "" {
+			return fmt.Errorf("source %q not found", options.SourceID)
+		}
+		_, err = fmt.Fprintln(stdout, "no enabled sources configured")
+		return err
+	}
+
+	messageRepo := messages.NewRepository(db)
+	exclusionRepo := exclusions.NewRepository(db)
+	client := tgclient.NewClient(tgclient.Config{
+		APIID:       a.config.TelegramAPIID,
+		APIHash:     a.config.TelegramAPIHash,
+		SessionPath: a.config.TelegramSessionPath,
+	})
+
+	results, err := client.SyncSources(ctx, selected, tgclient.SyncRepos{
+		States:     state.NewRepository(db),
+		Messages:   messageRepo,
+		Exclusions: exclusions.NewService(exclusionRepo, messageRepo),
+	}, options)
+	if err != nil {
+		return err
+	}
+
+	for _, result := range results {
+		if result.Error != "" {
+			_, err = fmt.Fprintf(stdout, "[%s] ERROR %s\n", result.Source.ID, result.Error)
+			if err != nil {
+				return fmt.Errorf("write sync error: %w", err)
+			}
+			continue
+		}
+
+		status := "synced"
+		switch {
+		case result.Baselined:
+			status = "baselined"
+		case result.Backfilled:
+			status = "backfilled"
+		case result.Truncated:
+			status = "truncated"
+		}
+
+		_, err = fmt.Fprintf(
+			stdout,
+			"[%s] %s resolved=%s latest=%d saved=%d skipped_excluded=%d state_advanced=%t\n",
+			result.Source.ID,
+			status,
+			result.Resolved.Name,
+			result.LatestMessageID,
+			result.SavedMessages,
+			result.SkippedExcluded,
+			result.StateAdvanced,
+		)
+		if err != nil {
+			return fmt.Errorf("write sync result: %w", err)
 		}
 	}
 

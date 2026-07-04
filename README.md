@@ -107,3 +107,29 @@ Preview one source:
 ```bash
 go run ./cmd/telegram-mcp telegram-dry-run --source sellerproof_support --limit 5
 ```
+
+## Telegram sync
+
+Baseline a source without saving old history:
+
+```bash
+go run ./cmd/telegram-mcp telegram-sync --source mpwb_chat
+```
+
+On the first run without `--backfill`, sync stores only the latest message id in `source_states`.
+It does not save old history.
+
+Save the latest N messages manually:
+
+```bash
+go run ./cmd/telegram-mcp telegram-sync --source mpwb_chat --backfill 20
+```
+
+Save new messages after the stored cursor:
+
+```bash
+go run ./cmd/telegram-mcp telegram-sync --source mpwb_chat --limit 200
+```
+
+If there are more new messages than `--limit`, messages are saved but the cursor is not advanced.
+Run again with a bigger limit to avoid silently skipping messages.
