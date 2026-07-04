@@ -48,7 +48,7 @@ func TestExternalMessageID(t *testing.T) {
 
 func TestMessageLink(t *testing.T) {
 	source := domain.Source{EntityRef: "https://t.me/mpwb_chat"}
-	got := messageLink(source, 26782)
+	got := messageLink(source, ResolvedPeer{}, domain.SourceLabelPost, 26782)
 	want := "https://t.me/mpwb_chat/26782"
 	if got != want {
 		t.Fatalf("link = %q, want %q", got, want)
@@ -57,7 +57,7 @@ func TestMessageLink(t *testing.T) {
 
 func TestMessageLinkSkipsInvite(t *testing.T) {
 	source := domain.Source{EntityRef: "https://t.me/+secret"}
-	if got := messageLink(source, 1); got != "" {
+	if got := messageLink(source, ResolvedPeer{}, domain.SourceLabelPost, 1); got != "" {
 		t.Fatalf("link = %q, want empty", got)
 	}
 }
@@ -69,5 +69,25 @@ func TestPublicUsernamePrefersExplicitUsername(t *testing.T) {
 	}
 	if got := publicUsername(source); got != "explicit" {
 		t.Fatalf("username = %q", got)
+	}
+}
+
+func TestMessageLinkForCommentUsesResolvedUsername(t *testing.T) {
+	source := domain.Source{EntityRef: "source_channel"}
+	resolved := ResolvedPeer{Username: "discussion_chat"}
+	got := messageLink(source, resolved, domain.SourceLabelComment, 123)
+	want := "https://t.me/discussion_chat/123"
+	if got != want {
+		t.Fatalf("link = %q, want %q", got, want)
+	}
+}
+
+func TestMessageLinkForPostUsesSourceUsername(t *testing.T) {
+	source := domain.Source{EntityRef: "source_channel"}
+	resolved := ResolvedPeer{Username: "discussion_chat"}
+	got := messageLink(source, resolved, domain.SourceLabelPost, 123)
+	want := "https://t.me/source_channel/123"
+	if got != want {
+		t.Fatalf("link = %q, want %q", got, want)
 	}
 }

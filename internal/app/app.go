@@ -664,7 +664,7 @@ func (a *App) TelegramSync(ctx context.Context, stdout io.Writer, options tgclie
 
 		_, err = fmt.Fprintf(
 			stdout,
-			"[%s] %s resolved=%s latest=%d saved=%d skipped_excluded=%d state_advanced=%t\n",
+			"[%s] %s resolved=%s latest=%d saved=%d skipped_excluded=%d state_advanced=%t comments_available=%t comments_latest=%d comments_saved=%d comments_skipped_excluded=%d comments_state_advanced=%t\n",
 			result.Source.ID,
 			status,
 			result.Resolved.Name,
@@ -672,6 +672,11 @@ func (a *App) TelegramSync(ctx context.Context, stdout io.Writer, options tgclie
 			result.SavedMessages,
 			result.SkippedExcluded,
 			result.StateAdvanced,
+			result.CommentsAvailable,
+			result.LatestCommentMessageID,
+			result.SavedComments,
+			result.SkippedExcludedComments,
+			result.CommentsStateAdvanced,
 		)
 		if err != nil {
 			return fmt.Errorf("write sync result: %w", err)

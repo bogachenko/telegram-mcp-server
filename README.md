@@ -181,3 +181,26 @@ Manual backfill through MCP:
   "backfill": 20
 }
 ```
+
+## Linked discussion comments
+
+For broadcast channels with linked discussion groups, `telegram-sync` also scans the discussion chat and stores those messages as `COMMENT`.
+
+Post cursor:
+
+```text
+source_states.last_message_id
+```
+
+Comment cursor:
+
+```text
+source_states.last_comment_message_id
+```
+
+Stored IDs use different labels, so post/comment message ids do not collide:
+
+```text
+telegram:POST:<source_id>:<message_id>
+telegram:COMMENT:<source_id>:<message_id>
+```

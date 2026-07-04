@@ -40,16 +40,23 @@ type SyncRepos struct {
 
 // SourceSyncResult describes one source sync result.
 type SourceSyncResult struct {
-	Source          domain.Source
-	Resolved        ResolvedPeer
-	LatestMessageID int64
-	SavedMessages   int
-	SkippedExcluded int
-	Baselined       bool
-	Backfilled      bool
-	Truncated       bool
-	StateAdvanced   bool
-	Error           string
+	Source                  domain.Source
+	Resolved                ResolvedPeer
+	LatestMessageID         int64
+	LatestCommentMessageID  int64
+	SavedMessages           int
+	SavedComments           int
+	SkippedExcluded         int
+	SkippedExcludedComments int
+	Baselined               bool
+	CommentsBaselined       bool
+	Backfilled              bool
+	CommentsAvailable       bool
+	Truncated               bool
+	CommentsTruncated       bool
+	StateAdvanced           bool
+	CommentsStateAdvanced   bool
+	Error                   string
 }
 
 // SyncSources resolves configured sources and saves new messages.
@@ -148,16 +155,22 @@ func syncOneSource(
 		result.SkippedExcluded = skipped
 		result.LatestMessageID = maxID
 		if maxID > 0 {
+			currentState, _, err := repos.States.Get(ctx, source.ID)
+			if err != nil {
+				result.Error = err.Error()
+				return result
+			}
 			if err := repos.States.Save(ctx, domain.SourceState{
 				SourceID:             source.ID,
 				LastMessageID:        maxID,
-				LastCommentMessageID: 0,
+				LastCommentMessageID: currentState.LastCommentMessageID,
 			}); err != nil {
 				result.Error = err.Error()
 				return result
 			}
 			result.StateAdvanced = true
 		}
+		applyLinkedCommentSync(ctx, api, resolved, source, repos, limit, backfill, &result)
 		return result
 	}
 
@@ -189,6 +202,7 @@ func syncOneSource(
 			return result
 		}
 		result.StateAdvanced = true
+		applyLinkedCommentSync(ctx, api, resolved, source, repos, limit, backfill, &result)
 		return result
 	}
 
@@ -226,7 +240,195 @@ func syncOneSource(
 		result.StateAdvanced = true
 	}
 
+	applyLinkedCommentSync(ctx, api, resolved, source, repos, limit, backfill, &result)
 	return result
+}
+
+type linkedCommentSyncResult struct {
+	available       bool
+	baselined       bool
+	truncated       bool
+	stateAdvanced   bool
+	latestCommentID int64
+	saved           int
+	skipped         int
+	err             error
+}
+
+func applyLinkedCommentSync(
+	ctx context.Context,
+	api *tg.Client,
+	resolvedPeer peers.Peer,
+	source domain.Source,
+	repos SyncRepos,
+	limit int,
+	backfill int,
+	result *SourceSyncResult,
+) {
+	comments := syncLinkedComments(ctx, api, resolvedPeer, source, repos, limit, backfill)
+	if comments.err != nil {
+		result.Error = comments.err.Error()
+		return
+	}
+	result.CommentsAvailable = comments.available
+	result.CommentsBaselined = comments.baselined
+	result.CommentsTruncated = comments.truncated
+	result.CommentsStateAdvanced = comments.stateAdvanced
+	result.LatestCommentMessageID = comments.latestCommentID
+	result.SavedComments = comments.saved
+	result.SkippedExcludedComments = comments.skipped
+}
+
+func syncLinkedComments(
+	ctx context.Context,
+	api *tg.Client,
+	resolvedPeer peers.Peer,
+	source domain.Source,
+	repos SyncRepos,
+	limit int,
+	backfill int,
+) linkedCommentSyncResult {
+	input, discussion, ok, err := linkedDiscussionInput(ctx, resolvedPeer)
+	if err != nil {
+		return linkedCommentSyncResult{err: err}
+	}
+	if !ok {
+		return linkedCommentSyncResult{}
+	}
+
+	result := linkedCommentSyncResult{available: true}
+	if backfill > 0 {
+		collected, _, truncated, err := collectHistory(ctx, api, input, backfill, 0)
+		if err != nil {
+			result.err = err
+			return result
+		}
+
+		saved, skipped, maxID, err := saveCollectedMessagesWithLabel(ctx, repos, source, discussion, domain.SourceLabelComment, collected)
+		if err != nil {
+			result.err = err
+			return result
+		}
+
+		result.saved = saved
+		result.skipped = skipped
+		result.latestCommentID = maxID
+		result.truncated = truncated
+
+		if maxID > 0 {
+			currentState, _, err := repos.States.Get(ctx, source.ID)
+			if err != nil {
+				result.err = err
+				return result
+			}
+			if err := repos.States.Save(ctx, domain.SourceState{
+				SourceID:             source.ID,
+				LastMessageID:        currentState.LastMessageID,
+				LastCommentMessageID: maxID,
+			}); err != nil {
+				result.err = err
+				return result
+			}
+			result.stateAdvanced = true
+		}
+		return result
+	}
+
+	currentState, found, err := repos.States.Get(ctx, source.ID)
+	if err != nil {
+		result.err = err
+		return result
+	}
+
+	if !found || currentState.LastCommentMessageID <= 0 {
+		latest, _, _, err := collectHistory(ctx, api, input, 1, 0)
+		if err != nil {
+			result.err = err
+			return result
+		}
+
+		result.baselined = true
+		if len(latest) == 0 {
+			return result
+		}
+
+		latestID := int64(latest[0].Msg.GetID())
+		result.latestCommentID = latestID
+		if err := repos.States.Save(ctx, domain.SourceState{
+			SourceID:             source.ID,
+			LastMessageID:        currentState.LastMessageID,
+			LastCommentMessageID: latestID,
+		}); err != nil {
+			result.err = err
+			return result
+		}
+		result.stateAdvanced = true
+		return result
+	}
+
+	collected, reachedState, truncated, err := collectHistory(ctx, api, input, limit, currentState.LastCommentMessageID)
+	if err != nil {
+		result.err = err
+		return result
+	}
+	result.truncated = truncated
+
+	saved, skipped, maxID, err := saveCollectedMessagesWithLabel(ctx, repos, source, discussion, domain.SourceLabelComment, collected)
+	if err != nil {
+		result.err = err
+		return result
+	}
+
+	result.saved = saved
+	result.skipped = skipped
+	result.latestCommentID = maxID
+
+	if maxID > currentState.LastCommentMessageID && reachedState && !truncated {
+		if err := repos.States.Save(ctx, domain.SourceState{
+			SourceID:             source.ID,
+			LastMessageID:        currentState.LastMessageID,
+			LastCommentMessageID: maxID,
+		}); err != nil {
+			result.err = err
+			return result
+		}
+		result.stateAdvanced = true
+	}
+
+	if maxID == 0 {
+		result.latestCommentID = currentState.LastCommentMessageID
+		result.stateAdvanced = true
+	}
+
+	return result
+}
+
+func linkedDiscussionInput(ctx context.Context, resolvedPeer peers.Peer) (tg.InputPeerClass, ResolvedPeer, bool, error) {
+	channel, ok := resolvedPeer.(peers.Channel)
+	if !ok {
+		return nil, ResolvedPeer{}, false, nil
+	}
+
+	broadcast, ok := channel.ToBroadcast()
+	if !ok {
+		return nil, ResolvedPeer{}, false, nil
+	}
+
+	discussion, ok, err := broadcast.DiscussionGroup(ctx)
+	if err != nil {
+		return nil, ResolvedPeer{}, false, err
+	}
+	if !ok {
+		return nil, ResolvedPeer{}, false, nil
+	}
+
+	username, _ := discussion.Username()
+	return discussion.InputPeer(), ResolvedPeer{
+		ID:       discussion.ID(),
+		TDLibID:  int64(discussion.TDLibPeerID()),
+		Name:     discussion.VisibleName(),
+		Username: username,
+	}, true, nil
 }
 
 func collectHistory(ctx context.Context, api *tg.Client, input tg.InputPeerClass, limit int, stopAtOrBefore int64) ([]querymessages.Elem, bool, bool, error) {
@@ -277,6 +479,17 @@ func saveCollectedMessages(
 	resolved ResolvedPeer,
 	collected []querymessages.Elem,
 ) (int, int, int64, error) {
+	return saveCollectedMessagesWithLabel(ctx, repos, source, resolved, domain.SourceLabelPost, collected)
+}
+
+func saveCollectedMessagesWithLabel(
+	ctx context.Context,
+	repos SyncRepos,
+	source domain.Source,
+	resolved ResolvedPeer,
+	label domain.SourceLabel,
+	collected []querymessages.Elem,
+) (int, int, int64, error) {
 	saved := 0
 	skipped := 0
 	var maxID int64
@@ -301,7 +514,7 @@ func saveCollectedMessages(
 			continue
 		}
 
-		if err := repos.Messages.Save(ctx, normalizeMessage(source, resolved, msg, sender)); err != nil {
+		if err := repos.Messages.Save(ctx, normalizeMessage(source, resolved, label, msg, sender)); err != nil {
 			return saved, skipped, maxID, err
 		}
 		saved++
@@ -310,17 +523,17 @@ func saveCollectedMessages(
 	return saved, skipped, maxID, nil
 }
 
-func normalizeMessage(source domain.Source, resolved ResolvedPeer, msg *tg.Message, sender domain.Sender) domain.Message {
+func normalizeMessage(source domain.Source, resolved ResolvedPeer, label domain.SourceLabel, msg *tg.Message, sender domain.Sender) domain.Message {
 	return domain.Message{
-		ExternalID:        externalMessageID(source.ID, domain.SourceLabelPost, int64(msg.ID)),
+		ExternalID:        externalMessageID(source.ID, label, int64(msg.ID)),
 		SourceID:          source.ID,
-		SourceLabel:       domain.SourceLabelPost,
+		SourceLabel:       label,
 		ChatID:            resolved.TDLibID,
 		ChatTitle:         resolved.Name,
 		MessageID:         int64(msg.ID),
 		Sender:            sender,
 		Text:              msg.Message,
-		Link:              messageLink(source, int64(msg.ID)),
+		Link:              messageLink(source, resolved, label, int64(msg.ID)),
 		Date:              time.Unix(int64(msg.Date), 0).UTC(),
 		HiddenByExclusion: false,
 	}
@@ -373,8 +586,11 @@ func externalMessageID(sourceID string, label domain.SourceLabel, messageID int6
 	return fmt.Sprintf("telegram:%s:%s:%d", label, sourceID, messageID)
 }
 
-func messageLink(source domain.Source, messageID int64) string {
+func messageLink(source domain.Source, resolved ResolvedPeer, label domain.SourceLabel, messageID int64) string {
 	username := publicUsername(source)
+	if label == domain.SourceLabelComment && strings.TrimSpace(resolved.Username) != "" {
+		username = strings.TrimPrefix(strings.TrimSpace(resolved.Username), "@")
+	}
 	if username == "" || strings.HasPrefix(username, "+") {
 		return ""
 	}

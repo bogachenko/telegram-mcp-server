@@ -344,17 +344,24 @@ func mapSyncResult(item tgclient.SourceSyncResult) map[string]any {
 	}
 
 	return map[string]any{
-		"source":            mapSource(item.Source),
-		"resolved":          mapResolvedPeer(item.Resolved),
-		"status":            status,
-		"latest_message_id": item.LatestMessageID,
-		"saved_messages":    item.SavedMessages,
-		"skipped_excluded":  item.SkippedExcluded,
-		"baselined":         item.Baselined,
-		"backfilled":        item.Backfilled,
-		"truncated":         item.Truncated,
-		"state_advanced":    item.StateAdvanced,
-		"error":             item.Error,
+		"source":                    mapSource(item.Source),
+		"resolved":                  mapResolvedPeer(item.Resolved),
+		"status":                    status,
+		"latest_message_id":         item.LatestMessageID,
+		"latest_comment_message_id": item.LatestCommentMessageID,
+		"saved_messages":            item.SavedMessages,
+		"saved_comments":            item.SavedComments,
+		"skipped_excluded":          item.SkippedExcluded,
+		"skipped_excluded_comments": item.SkippedExcludedComments,
+		"baselined":                 item.Baselined,
+		"comments_baselined":        item.CommentsBaselined,
+		"backfilled":                item.Backfilled,
+		"comments_available":        item.CommentsAvailable,
+		"truncated":                 item.Truncated,
+		"comments_truncated":        item.CommentsTruncated,
+		"state_advanced":            item.StateAdvanced,
+		"comments_state_advanced":   item.CommentsStateAdvanced,
+		"error":                     item.Error,
 	}
 }
 
