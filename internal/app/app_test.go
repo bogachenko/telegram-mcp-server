@@ -13,6 +13,8 @@ func TestPrintStatus(t *testing.T) {
 		DataDir:            "data",
 		DatabasePath:       "data/telegram-mcp.sqlite",
 		TelegramSessionDir: "data/session",
+		ListenAddr:         "127.0.0.1:1984",
+		PublicBaseURL:      "https://tg-mcp.elektrosila-avtomatika.store",
 	})
 
 	var output bytes.Buffer
@@ -26,6 +28,10 @@ func TestPrintStatus(t *testing.T) {
 		"data dir: data",
 		"database path: data/telegram-mcp.sqlite",
 		"telegram session dir: data/session",
+		"listen addr: 127.0.0.1:1984",
+		"public base URL: https://tg-mcp.elektrosila-avtomatika.store",
+		"mcp endpoint: /mcp",
+		"health endpoint: /healthz",
 		"mcp tools planned:",
 	} {
 		if !strings.Contains(got, want) {
