@@ -92,8 +92,39 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer) error {
 			Enabled:        !*disabled,
 		})
 
+	case "source-remove":
+		fs := flag.NewFlagSet("source-remove", flag.ContinueOnError)
+		fs.SetOutput(stdout)
+		id := fs.String("id", "", "source id")
+		purge := fs.Bool("purge", false, "also delete source state, messages and source-scoped exclusions")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return application.SourceRemove(context.Background(), stdout, strings.TrimSpace(*id), *purge)
+
 	case "source-list":
 		return application.SourceList(context.Background(), stdout)
+
+	case "messages-recent":
+		fs := flag.NewFlagSet("messages-recent", flag.ContinueOnError)
+		fs.SetOutput(stdout)
+		limit := fs.Int("limit", 20, "maximum messages to print")
+		includeHidden := fs.Bool("include-hidden", false, "include messages hidden by exclusions")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return application.MessagesRecent(context.Background(), stdout, *limit, *includeHidden)
+
+	case "messages-search":
+		fs := flag.NewFlagSet("messages-search", flag.ContinueOnError)
+		fs.SetOutput(stdout)
+		query := fs.String("query", "", "text search query")
+		limit := fs.Int("limit", 20, "maximum messages to print")
+		includeHidden := fs.Bool("include-hidden", false, "include messages hidden by exclusions")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return application.MessagesSearch(context.Background(), stdout, strings.TrimSpace(*query), *limit, *includeHidden)
 
 	case "telegram-auth":
 		return application.TelegramAuth(context.Background(), stdin, stdout)
@@ -246,6 +277,86 @@ func (a *App) SourceAdd(ctx context.Context, stdout io.Writer, source domain.Sou
 	return nil
 }
 
+// SourceRemove deletes a configured source. With purge it also deletes dependent local data.
+func (a *App) SourceRemove(ctx context.Context, stdout io.Writer, id string, purge bool) error {
+	if a == nil {
+		return fmt.Errorf("app is required")
+	}
+	if stdout == nil {
+		return fmt.Errorf("stdout writer is required")
+	}
+	if id == "" {
+		return fmt.Errorf("source id is required")
+	}
+
+	db, err := a.openStorage(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	sourceRepo := sources.NewRepository(db)
+	_, found, err := sourceRepo.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("source %q not found", id)
+	}
+
+	if !purge {
+		if err := sourceRepo.Remove(ctx, id); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "source removed\nid: %s\npurged: false\n", id)
+		if err != nil {
+			return fmt.Errorf("write source remove status: %w", err)
+		}
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin purge source: %w", err)
+	}
+	defer tx.Rollback()
+
+	counts := map[string]int64{}
+	for name, query := range map[string]string{
+		"source_states":            `DELETE FROM source_states WHERE source_id = ?`,
+		"messages":                 `DELETE FROM messages WHERE source_id = ?`,
+		"source_scoped_exclusions": `DELETE FROM excluded_senders WHERE scope_type = 'source' AND source_id = ?`,
+		"sources":                  `DELETE FROM sources WHERE id = ?`,
+	} {
+		result, err := tx.ExecContext(ctx, query, id)
+		if err != nil {
+			return fmt.Errorf("purge %s: %w", name, err)
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("count purge %s: %w", name, err)
+		}
+		counts[name] = count
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit purge source: %w", err)
+	}
+
+	_, err = fmt.Fprintf(
+		stdout,
+		"source removed\nid: %s\npurged: true\nmessages: %d\nsource_states: %d\nsource_scoped_exclusions: %d\n",
+		id,
+		counts["messages"],
+		counts["source_states"],
+		counts["source_scoped_exclusions"],
+	)
+	if err != nil {
+		return fmt.Errorf("write source purge status: %w", err)
+	}
+	return nil
+}
+
 // SourceList prints configured Telegram sources.
 func (a *App) SourceList(ctx context.Context, stdout io.Writer) error {
 	if a == nil {
@@ -278,6 +389,52 @@ func (a *App) SourceList(ctx context.Context, stdout io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// MessagesRecent prints recent stored messages.
+func (a *App) MessagesRecent(ctx context.Context, stdout io.Writer, limit int, includeHidden bool) error {
+	if a == nil {
+		return fmt.Errorf("app is required")
+	}
+	if stdout == nil {
+		return fmt.Errorf("stdout writer is required")
+	}
+
+	db, err := a.openStorage(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	items, err := messages.NewRepository(db).Recent(ctx, limit, includeHidden)
+	if err != nil {
+		return err
+	}
+
+	return printMessages(stdout, items)
+}
+
+// MessagesSearch prints stored messages matching text query.
+func (a *App) MessagesSearch(ctx context.Context, stdout io.Writer, query string, limit int, includeHidden bool) error {
+	if a == nil {
+		return fmt.Errorf("app is required")
+	}
+	if stdout == nil {
+		return fmt.Errorf("stdout writer is required")
+	}
+
+	db, err := a.openStorage(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	items, err := messages.NewRepository(db).Search(ctx, query, limit, includeHidden)
+	if err != nil {
+		return err
+	}
+
+	return printMessages(stdout, items)
 }
 
 // TelegramAuth starts interactive Telegram user-client authorization.
@@ -524,6 +681,49 @@ func (a *App) openStorage(ctx context.Context) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+func printMessages(stdout io.Writer, items []domain.Message) error {
+	if len(items) == 0 {
+		_, err := fmt.Fprintln(stdout, "no messages")
+		return err
+	}
+
+	for _, item := range items {
+		hidden := ""
+		if item.HiddenByExclusion {
+			hidden = " hidden"
+		}
+
+		_, err := fmt.Fprintf(
+			stdout,
+			"%s\t%s\t#%d%s\t%s\t%s\n",
+			item.Date.Format("2006-01-02 15:04:05"),
+			item.SourceID,
+			item.MessageID,
+			hidden,
+			senderDisplay(item.Sender),
+			oneLine(item.Text),
+		)
+		if err != nil {
+			return fmt.Errorf("write messages: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func senderDisplay(sender domain.Sender) string {
+	if strings.TrimSpace(sender.DisplayName) != "" {
+		return strings.TrimSpace(sender.DisplayName)
+	}
+	if strings.TrimSpace(sender.Username) != "" {
+		return "@" + strings.TrimPrefix(strings.TrimSpace(sender.Username), "@")
+	}
+	if sender.ID != 0 {
+		return fmt.Sprintf("id:%d", sender.ID)
+	}
+	return "-"
 }
 
 func filterSources(items []domain.Source, sourceID string) []domain.Source {

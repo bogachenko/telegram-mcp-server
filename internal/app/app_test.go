@@ -92,3 +92,18 @@ func TestOneLine(t *testing.T) {
 		t.Fatalf("one line = %q", got)
 	}
 }
+
+func TestSenderDisplay(t *testing.T) {
+	if got := senderDisplay(domain.Sender{DisplayName: "Ivan"}); got != "Ivan" {
+		t.Fatalf("display = %q", got)
+	}
+	if got := senderDisplay(domain.Sender{Username: "sellerproof"}); got != "@sellerproof" {
+		t.Fatalf("display = %q", got)
+	}
+	if got := senderDisplay(domain.Sender{ID: 42}); got != "id:42" {
+		t.Fatalf("display = %q", got)
+	}
+	if got := senderDisplay(domain.Sender{}); got != "-" {
+		t.Fatalf("display = %q", got)
+	}
+}

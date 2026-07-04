@@ -133,3 +133,29 @@ go run ./cmd/telegram-mcp telegram-sync --source mpwb_chat --limit 200
 
 If there are more new messages than `--limit`, messages are saved but the cursor is not advanced.
 Run again with a bigger limit to avoid silently skipping messages.
+
+## Local message inspection
+
+Print recent stored messages:
+
+```bash
+go run ./cmd/telegram-mcp messages-recent --limit 20
+```
+
+Search stored messages:
+
+```bash
+go run ./cmd/telegram-mcp messages-search --query "менеджер" --limit 20
+```
+
+Remove a source that has no stored messages/state:
+
+```bash
+go run ./cmd/telegram-mcp source-remove --id sellerproof_support
+```
+
+Remove a source and its local state/messages/source-scoped exclusions:
+
+```bash
+go run ./cmd/telegram-mcp source-remove --id sellerproof_news --purge
+```
