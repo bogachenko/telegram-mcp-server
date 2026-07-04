@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bogachenko/telegram-mcp-server/internal/config"
+	"github.com/bogachenko/telegram-mcp-server/internal/domain"
 )
 
 func TestPrintStatus(t *testing.T) {
@@ -64,5 +65,30 @@ func TestRunWithIORejectsNilStdout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "stdout writer is required") {
 		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestFilterSources(t *testing.T) {
+	items := []domain.Source{
+		{ID: "a", Enabled: true},
+		{ID: "b", Enabled: false},
+		{ID: "c", Enabled: true},
+	}
+
+	got := filterSources(items, "")
+	if len(got) != 2 {
+		t.Fatalf("enabled count = %d, want 2", len(got))
+	}
+
+	got = filterSources(items, "c")
+	if len(got) != 1 || got[0].ID != "c" {
+		t.Fatalf("filtered = %+v", got)
+	}
+}
+
+func TestOneLine(t *testing.T) {
+	got := oneLine("hello\n\nworld\tfrom telegram")
+	if got != "hello world from telegram" {
+		t.Fatalf("one line = %q", got)
 	}
 }

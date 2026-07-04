@@ -77,3 +77,33 @@ The default session file is:
 ```text
 data/session/session.json
 ```
+
+## Source dry-run
+
+Add a source:
+
+```bash
+go run ./cmd/telegram-mcp source-add \
+  --id sellerproof_support \
+  --type channel \
+  --entity sellerproof_support \
+  --title "SellerProof Support"
+```
+
+List sources:
+
+```bash
+go run ./cmd/telegram-mcp source-list
+```
+
+Resolve sources and preview recent messages without saving them:
+
+```bash
+go run ./cmd/telegram-mcp telegram-dry-run --limit 5
+```
+
+Preview one source:
+
+```bash
+go run ./cmd/telegram-mcp telegram-dry-run --source sellerproof_support --limit 5
+```

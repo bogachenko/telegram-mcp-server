@@ -3,13 +3,16 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/bogachenko/telegram-mcp-server/internal/config"
+	"github.com/bogachenko/telegram-mcp-server/internal/domain"
 	"github.com/bogachenko/telegram-mcp-server/internal/exclusions"
 	"github.com/bogachenko/telegram-mcp-server/internal/mcp"
 	"github.com/bogachenko/telegram-mcp-server/internal/messages"
@@ -67,11 +70,45 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer) error {
 		application.config.ListenAddr = *listenAddr
 		return application.Serve(context.Background(), stdout)
 
+	case "source-add":
+		fs := flag.NewFlagSet("source-add", flag.ContinueOnError)
+		fs.SetOutput(stdout)
+		id := fs.String("id", "", "stable local source id")
+		sourceType := fs.String("type", string(domain.SourceTypeChannel), "source type: channel or group")
+		entity := fs.String("entity", "", "Telegram username, t.me link, or resolvable entity reference")
+		username := fs.String("username", "", "public username without @")
+		title := fs.String("title", "", "human-readable title")
+		disabled := fs.Bool("disabled", false, "save source as disabled")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return application.SourceAdd(context.Background(), stdout, domain.Source{
+			ID:             strings.TrimSpace(*id),
+			Type:           domain.SourceType(strings.TrimSpace(*sourceType)),
+			EntityRef:      strings.TrimSpace(*entity),
+			PublicUsername: strings.TrimPrefix(strings.TrimSpace(*username), "@"),
+			Title:          strings.TrimSpace(*title),
+			Enabled:        !*disabled,
+		})
+
+	case "source-list":
+		return application.SourceList(context.Background(), stdout)
+
 	case "telegram-auth":
 		return application.TelegramAuth(context.Background(), stdin, stdout)
 
 	case "telegram-me":
 		return application.TelegramMe(context.Background(), stdout)
+
+	case "telegram-dry-run":
+		fs := flag.NewFlagSet("telegram-dry-run", flag.ContinueOnError)
+		fs.SetOutput(stdout)
+		limit := fs.Int("limit", 5, "messages per source, max 50")
+		sourceID := fs.String("source", "", "optional source id filter")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return application.TelegramDryRun(context.Background(), stdout, *limit, strings.TrimSpace(*sourceID))
 
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
@@ -130,15 +167,11 @@ func (a *App) Serve(ctx context.Context, stdout io.Writer) error {
 		return fmt.Errorf("stdout writer is required")
 	}
 
-	db, err := storage.Open(ctx, a.config.DatabasePath)
+	db, err := a.openStorage(ctx)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-
-	if err := storage.Migrate(ctx, db); err != nil {
-		return err
-	}
 
 	sourceRepo := sources.NewRepository(db)
 	messageRepo := messages.NewRepository(db)
@@ -165,6 +198,69 @@ func (a *App) Serve(ctx context.Context, stdout io.Writer) error {
 		return fmt.Errorf("serve mcp http: %w", err)
 	}
 
+	return nil
+}
+
+// SourceAdd saves a Telegram source configuration.
+func (a *App) SourceAdd(ctx context.Context, stdout io.Writer, source domain.Source) error {
+	if a == nil {
+		return fmt.Errorf("app is required")
+	}
+	if stdout == nil {
+		return fmt.Errorf("stdout writer is required")
+	}
+	if source.Type == "" {
+		source.Type = domain.SourceTypeChannel
+	}
+
+	db, err := a.openStorage(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	if err := sources.NewRepository(db).Upsert(ctx, source); err != nil {
+		return err
+	}
+
+	_, err = fmt.Fprintf(stdout, "source saved\nid: %s\ntype: %s\nentity_ref: %s\nenabled: %t\n", source.ID, source.Type, source.EntityRef, source.Enabled)
+	if err != nil {
+		return fmt.Errorf("write source status: %w", err)
+	}
+	return nil
+}
+
+// SourceList prints configured Telegram sources.
+func (a *App) SourceList(ctx context.Context, stdout io.Writer) error {
+	if a == nil {
+		return fmt.Errorf("app is required")
+	}
+	if stdout == nil {
+		return fmt.Errorf("stdout writer is required")
+	}
+
+	db, err := a.openStorage(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	items, err := sources.NewRepository(db).List(ctx)
+	if err != nil {
+		return err
+	}
+
+	if len(items) == 0 {
+		_, err = fmt.Fprintln(stdout, "no sources configured")
+		return err
+	}
+
+	for _, source := range items {
+		_, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%t\t%s\n", source.ID, source.Type, source.EntityRef, source.Enabled, source.Title)
+		if err != nil {
+			return fmt.Errorf("write source list: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -241,6 +337,116 @@ func (a *App) TelegramMe(ctx context.Context, stdout io.Writer) error {
 	}
 
 	return nil
+}
+
+// TelegramDryRun resolves configured sources and prints recent messages without saving them.
+func (a *App) TelegramDryRun(ctx context.Context, stdout io.Writer, limit int, sourceID string) error {
+	if a == nil {
+		return fmt.Errorf("app is required")
+	}
+	if stdout == nil {
+		return fmt.Errorf("stdout writer is required")
+	}
+
+	db, err := a.openStorage(ctx)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	allSources, err := sources.NewRepository(db).List(ctx)
+	if err != nil {
+		return err
+	}
+
+	selected := filterSources(allSources, sourceID)
+	if len(selected) == 0 {
+		if sourceID != "" {
+			return fmt.Errorf("source %q not found", sourceID)
+		}
+		_, err = fmt.Fprintln(stdout, "no enabled sources configured")
+		return err
+	}
+
+	client := tgclient.NewClient(tgclient.Config{
+		APIID:       a.config.TelegramAPIID,
+		APIHash:     a.config.TelegramAPIHash,
+		SessionPath: a.config.TelegramSessionPath,
+	})
+
+	previews, err := client.DryRunSources(ctx, selected, limit)
+	if err != nil {
+		return err
+	}
+
+	for _, preview := range previews {
+		if preview.Error != "" {
+			_, err = fmt.Fprintf(stdout, "\n[%s] ERROR %s\n", preview.Source.ID, preview.Error)
+			if err != nil {
+				return fmt.Errorf("write dry-run source error: %w", err)
+			}
+			continue
+		}
+
+		_, err = fmt.Fprintf(
+			stdout,
+			"\n[%s] %s id=%d username=%s messages=%d\n",
+			preview.Source.ID,
+			preview.Resolved.Name,
+			preview.Resolved.ID,
+			preview.Resolved.Username,
+			len(preview.Messages),
+		)
+		if err != nil {
+			return fmt.Errorf("write dry-run source: %w", err)
+		}
+
+		for _, message := range preview.Messages {
+			_, err = fmt.Fprintf(stdout, "  #%d %s %s\n", message.ID, message.Date.Format("2006-01-02 15:04:05"), oneLine(message.Text))
+			if err != nil {
+				return fmt.Errorf("write dry-run message: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (a *App) openStorage(ctx context.Context) (*sql.DB, error) {
+	db, err := storage.Open(ctx, a.config.DatabasePath)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := storage.Migrate(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	return db, nil
+}
+
+func filterSources(items []domain.Source, sourceID string) []domain.Source {
+	result := make([]domain.Source, 0, len(items))
+	for _, item := range items {
+		if !item.Enabled {
+			continue
+		}
+		if sourceID != "" && item.ID != sourceID {
+			continue
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+func oneLine(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if len([]rune(value)) <= 160 {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:160]) + "..."
 }
 
 func displayPublicBaseURL(value string) string {
