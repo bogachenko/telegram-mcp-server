@@ -322,21 +322,25 @@ func (a *App) SourceRemove(ctx context.Context, stdout io.Writer, id string, pur
 	defer tx.Rollback()
 
 	counts := map[string]int64{}
-	for name, query := range map[string]string{
-		"source_states":            `DELETE FROM source_states WHERE source_id = ?`,
-		"messages":                 `DELETE FROM messages WHERE source_id = ?`,
-		"source_scoped_exclusions": `DELETE FROM excluded_senders WHERE scope_type = 'source' AND source_id = ?`,
-		"sources":                  `DELETE FROM sources WHERE id = ?`,
-	} {
-		result, err := tx.ExecContext(ctx, query, id)
+	purgeSteps := []struct {
+		name  string
+		query string
+	}{
+		{name: "source_states", query: `DELETE FROM source_states WHERE source_id = ?`},
+		{name: "messages", query: `DELETE FROM messages WHERE source_id = ?`},
+		{name: "source_scoped_exclusions", query: `DELETE FROM excluded_senders WHERE scope_type = 'source' AND source_id = ?`},
+		{name: "sources", query: `DELETE FROM sources WHERE id = ?`},
+	}
+	for _, step := range purgeSteps {
+		result, err := tx.ExecContext(ctx, step.query, id)
 		if err != nil {
-			return fmt.Errorf("purge %s: %w", name, err)
+			return fmt.Errorf("purge %s: %w", step.name, err)
 		}
 		count, err := result.RowsAffected()
 		if err != nil {
-			return fmt.Errorf("count purge %s: %w", name, err)
+			return fmt.Errorf("count purge %s: %w", step.name, err)
 		}
-		counts[name] = count
+		counts[step.name] = count
 	}
 
 	if err := tx.Commit(); err != nil {
