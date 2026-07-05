@@ -64,6 +64,52 @@ func TestRepositoryUpsertGetListRemove(t *testing.T) {
 	}
 }
 
+func TestRepositoryPurgeDeletesDependentData(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	repo := NewRepository(db)
+	source := domain.Source{
+		ID:        "mpwb_chat",
+		Type:      domain.SourceTypeGroup,
+		EntityRef: "mpwb_chat",
+		Enabled:   true,
+	}
+	if err := repo.Upsert(context.Background(), source); err != nil {
+		t.Fatalf("upsert source: %v", err)
+	}
+
+	if _, err := db.ExecContext(context.Background(), `INSERT INTO source_states (source_id, last_message_id, last_comment_message_id, updated_at) VALUES (?, 10, 20, datetime('now'))`, source.ID); err != nil {
+		t.Fatalf("insert state: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `INSERT INTO messages (
+		external_id, source_id, source_label, chat_id, message_id, text, hidden_by_exclusion, created_at
+	) VALUES (?, ?, 'POST', -1001, 10, 'hello', 0, datetime('now'))`, "telegram:POST:mpwb_chat:10", source.ID); err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `INSERT INTO excluded_senders (
+		sender_id, reason, scope_type, source_id, created_at, created_by
+	) VALUES (123, 'spam', 'source', ?, datetime('now'), 'test')`, source.ID); err != nil {
+		t.Fatalf("insert exclusion: %v", err)
+	}
+
+	purged, err := repo.Purge(context.Background(), source.ID)
+	if err != nil {
+		t.Fatalf("purge source: %v", err)
+	}
+	if purged.Messages != 1 || purged.SourceStates != 1 || purged.SourceScopedExclusions != 1 || purged.Sources != 1 {
+		t.Fatalf("purged = %+v", purged)
+	}
+
+	_, found, err := repo.Get(context.Background(), source.ID)
+	if err != nil {
+		t.Fatalf("get source after purge: %v", err)
+	}
+	if found {
+		t.Fatal("source found after purge")
+	}
+}
+
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 

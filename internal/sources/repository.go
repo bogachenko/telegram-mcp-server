@@ -19,6 +19,14 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
+// PurgeResult contains counts deleted during source purge.
+type PurgeResult struct {
+	Messages               int64
+	SourceStates           int64
+	SourceScopedExclusions int64
+	Sources                int64
+}
+
 // Upsert inserts or updates a configured source.
 func (r *Repository) Upsert(ctx context.Context, source domain.Source) error {
 	if r == nil || r.db == nil {
@@ -108,6 +116,76 @@ func (r *Repository) Remove(ctx context.Context, id string) error {
 		return fmt.Errorf("remove source: %w", err)
 	}
 	return nil
+}
+
+// Purge deletes a source and dependent local data in a safe order.
+func (r *Repository) Purge(ctx context.Context, id string) (PurgeResult, error) {
+	var purged PurgeResult
+	if r == nil || r.db == nil {
+		return purged, fmt.Errorf("source repository is required")
+	}
+	if id == "" {
+		return purged, fmt.Errorf("source id is required")
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return purged, fmt.Errorf("begin purge source: %w", err)
+	}
+	defer tx.Rollback()
+
+	steps := []struct {
+		name  string
+		query string
+		set   func(int64)
+	}{
+		{
+			name:  "source_states",
+			query: `DELETE FROM source_states WHERE source_id = ?`,
+			set: func(count int64) {
+				purged.SourceStates = count
+			},
+		},
+		{
+			name:  "messages",
+			query: `DELETE FROM messages WHERE source_id = ?`,
+			set: func(count int64) {
+				purged.Messages = count
+			},
+		},
+		{
+			name:  "source_scoped_exclusions",
+			query: `DELETE FROM excluded_senders WHERE scope_type = 'source' AND source_id = ?`,
+			set: func(count int64) {
+				purged.SourceScopedExclusions = count
+			},
+		},
+		{
+			name:  "sources",
+			query: `DELETE FROM sources WHERE id = ?`,
+			set: func(count int64) {
+				purged.Sources = count
+			},
+		},
+	}
+
+	for _, step := range steps {
+		result, err := tx.ExecContext(ctx, step.query, id)
+		if err != nil {
+			return purged, fmt.Errorf("purge %s: %w", step.name, err)
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return purged, fmt.Errorf("count purge %s: %w", step.name, err)
+		}
+		step.set(count)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return purged, fmt.Errorf("commit purge source: %w", err)
+	}
+
+	return purged, nil
 }
 
 type sourceScanner interface {

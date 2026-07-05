@@ -109,22 +109,26 @@ func RunWithIO(args []string, stdin io.Reader, stdout io.Writer) error {
 		fs := flag.NewFlagSet("messages-recent", flag.ContinueOnError)
 		fs.SetOutput(stdout)
 		limit := fs.Int("limit", 20, "maximum messages to print")
+		sourceID := fs.String("source", "", "optional source id filter")
+		sourceLabel := fs.String("label", "", "optional source label filter: POST or COMMENT")
 		includeHidden := fs.Bool("include-hidden", false, "include messages hidden by exclusions")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return application.MessagesRecent(context.Background(), stdout, *limit, *includeHidden)
+		return application.MessagesRecent(context.Background(), stdout, *limit, *includeHidden, strings.TrimSpace(*sourceID), strings.TrimSpace(*sourceLabel))
 
 	case "messages-search":
 		fs := flag.NewFlagSet("messages-search", flag.ContinueOnError)
 		fs.SetOutput(stdout)
 		query := fs.String("query", "", "text search query")
 		limit := fs.Int("limit", 20, "maximum messages to print")
+		sourceID := fs.String("source", "", "optional source id filter")
+		sourceLabel := fs.String("label", "", "optional source label filter: POST or COMMENT")
 		includeHidden := fs.Bool("include-hidden", false, "include messages hidden by exclusions")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return application.MessagesSearch(context.Background(), stdout, strings.TrimSpace(*query), *limit, *includeHidden)
+		return application.MessagesSearch(context.Background(), stdout, strings.TrimSpace(*query), *limit, *includeHidden, strings.TrimSpace(*sourceID), strings.TrimSpace(*sourceLabel))
 
 	case "telegram-auth":
 		return application.TelegramAuth(context.Background(), stdin, stdout)
@@ -323,45 +327,18 @@ func (a *App) SourceRemove(ctx context.Context, stdout io.Writer, id string, pur
 		return nil
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
+	purged, err := sourceRepo.Purge(ctx, id)
 	if err != nil {
-		return fmt.Errorf("begin purge source: %w", err)
-	}
-	defer tx.Rollback()
-
-	counts := map[string]int64{}
-	purgeSteps := []struct {
-		name  string
-		query string
-	}{
-		{name: "source_states", query: `DELETE FROM source_states WHERE source_id = ?`},
-		{name: "messages", query: `DELETE FROM messages WHERE source_id = ?`},
-		{name: "source_scoped_exclusions", query: `DELETE FROM excluded_senders WHERE scope_type = 'source' AND source_id = ?`},
-		{name: "sources", query: `DELETE FROM sources WHERE id = ?`},
-	}
-	for _, step := range purgeSteps {
-		result, err := tx.ExecContext(ctx, step.query, id)
-		if err != nil {
-			return fmt.Errorf("purge %s: %w", step.name, err)
-		}
-		count, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("count purge %s: %w", step.name, err)
-		}
-		counts[step.name] = count
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit purge source: %w", err)
+		return err
 	}
 
 	_, err = fmt.Fprintf(
 		stdout,
 		"source removed\nid: %s\npurged: true\nmessages: %d\nsource_states: %d\nsource_scoped_exclusions: %d\n",
 		id,
-		counts["messages"],
-		counts["source_states"],
-		counts["source_scoped_exclusions"],
+		purged.Messages,
+		purged.SourceStates,
+		purged.SourceScopedExclusions,
 	)
 	if err != nil {
 		return fmt.Errorf("write source purge status: %w", err)
@@ -404,7 +381,7 @@ func (a *App) SourceList(ctx context.Context, stdout io.Writer) error {
 }
 
 // MessagesRecent prints recent stored messages.
-func (a *App) MessagesRecent(ctx context.Context, stdout io.Writer, limit int, includeHidden bool) error {
+func (a *App) MessagesRecent(ctx context.Context, stdout io.Writer, limit int, includeHidden bool, sourceID string, sourceLabel string) error {
 	if a == nil {
 		return fmt.Errorf("app is required")
 	}
@@ -418,7 +395,7 @@ func (a *App) MessagesRecent(ctx context.Context, stdout io.Writer, limit int, i
 	}
 	defer db.Close()
 
-	items, err := messages.NewRepository(db).Recent(ctx, limit, includeHidden)
+	items, err := messages.NewRepository(db).RecentFiltered(ctx, limit, includeHidden, messageFilter(sourceID, sourceLabel))
 	if err != nil {
 		return err
 	}
@@ -427,7 +404,7 @@ func (a *App) MessagesRecent(ctx context.Context, stdout io.Writer, limit int, i
 }
 
 // MessagesSearch prints stored messages matching text query.
-func (a *App) MessagesSearch(ctx context.Context, stdout io.Writer, query string, limit int, includeHidden bool) error {
+func (a *App) MessagesSearch(ctx context.Context, stdout io.Writer, query string, limit int, includeHidden bool, sourceID string, sourceLabel string) error {
 	if a == nil {
 		return fmt.Errorf("app is required")
 	}
@@ -441,12 +418,19 @@ func (a *App) MessagesSearch(ctx context.Context, stdout io.Writer, query string
 	}
 	defer db.Close()
 
-	items, err := messages.NewRepository(db).Search(ctx, query, limit, includeHidden)
+	items, err := messages.NewRepository(db).SearchFiltered(ctx, query, limit, includeHidden, messageFilter(sourceID, sourceLabel))
 	if err != nil {
 		return err
 	}
 
 	return printMessages(stdout, items)
+}
+
+func messageFilter(sourceID string, sourceLabel string) messages.Filter {
+	return messages.Filter{
+		SourceID:    strings.TrimSpace(sourceID),
+		SourceLabel: domain.SourceLabel(strings.ToUpper(strings.TrimSpace(sourceLabel))),
+	}
 }
 
 // TelegramAuth starts interactive Telegram user-client authorization.

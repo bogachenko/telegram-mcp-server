@@ -21,6 +21,12 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
+// Filter limits message queries by source and source label.
+type Filter struct {
+	SourceID    string
+	SourceLabel domain.SourceLabel
+}
+
 // Save inserts or updates a normalized Telegram message.
 func (r *Repository) Save(ctx context.Context, message domain.Message) error {
 	if r == nil || r.db == nil {
@@ -94,6 +100,11 @@ func (r *Repository) Get(ctx context.Context, externalID string) (domain.Message
 
 // Recent returns recent messages ordered newest first.
 func (r *Repository) Recent(ctx context.Context, limit int, includeHidden bool) ([]domain.Message, error) {
+	return r.RecentFiltered(ctx, limit, includeHidden, Filter{})
+}
+
+// RecentFiltered returns recent messages ordered newest first and filtered by source/label.
+func (r *Repository) RecentFiltered(ctx context.Context, limit int, includeHidden bool, filter Filter) ([]domain.Message, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("message repository is required")
 	}
@@ -103,9 +114,7 @@ func (r *Repository) Recent(ctx context.Context, limit int, includeHidden bool) 
 
 	query := selectMessagesSQL()
 	args := []any{}
-	if !includeHidden {
-		query += ` WHERE hidden_by_exclusion = 0`
-	}
+	query, args = applyMessageFilter(query, args, false, includeHidden, filter)
 	query += ` ORDER BY date DESC, message_id DESC LIMIT ?`
 	args = append(args, limit)
 	return r.list(ctx, query, args...)
@@ -113,6 +122,11 @@ func (r *Repository) Recent(ctx context.Context, limit int, includeHidden bool) 
 
 // Search returns messages whose text contains query.
 func (r *Repository) Search(ctx context.Context, queryText string, limit int, includeHidden bool) ([]domain.Message, error) {
+	return r.SearchFiltered(ctx, queryText, limit, includeHidden, Filter{})
+}
+
+// SearchFiltered returns messages whose text contains query and filters by source/label.
+func (r *Repository) SearchFiltered(ctx context.Context, queryText string, limit int, includeHidden bool, filter Filter) ([]domain.Message, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("message repository is required")
 	}
@@ -126,12 +140,42 @@ func (r *Repository) Search(ctx context.Context, queryText string, limit int, in
 
 	query := selectMessagesSQL() + ` WHERE lower(coalesce(text, '')) LIKE ?`
 	args := []any{"%" + strings.ToLower(queryText) + "%"}
-	if !includeHidden {
-		query += ` AND hidden_by_exclusion = 0`
-	}
+	query, args = applyMessageFilter(query, args, true, includeHidden, filter)
 	query += ` ORDER BY date DESC, message_id DESC LIMIT ?`
 	args = append(args, limit)
 	return r.list(ctx, query, args...)
+}
+
+func applyMessageFilter(query string, args []any, hasWhere bool, includeHidden bool, filter Filter) (string, []any) {
+	conditions := []string{}
+
+	if !includeHidden {
+		conditions = append(conditions, `hidden_by_exclusion = 0`)
+	}
+
+	sourceID := strings.TrimSpace(filter.SourceID)
+	if sourceID != "" {
+		conditions = append(conditions, `source_id = ?`)
+		args = append(args, sourceID)
+	}
+
+	sourceLabel := strings.TrimSpace(string(filter.SourceLabel))
+	if sourceLabel != "" {
+		conditions = append(conditions, `source_label = ?`)
+		args = append(args, sourceLabel)
+	}
+
+	if len(conditions) == 0 {
+		return query, args
+	}
+
+	if hasWhere {
+		query += ` AND `
+	} else {
+		query += ` WHERE `
+	}
+	query += strings.Join(conditions, ` AND `)
+	return query, args
 }
 
 // HideBySender marks matching messages hidden by exclusion and returns affected count.

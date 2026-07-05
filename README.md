@@ -160,6 +160,37 @@ Remove a source and its local state/messages/source-scoped exclusions:
 go run ./cmd/telegram-mcp source-remove --id sellerproof_news --purge
 ```
 
+## MCP message query filters
+
+`telegram.messages_recent` and `telegram.messages_search` support optional filters:
+
+```json
+{
+  "source_id": "mpwb_chat",
+  "source_label": "POST",
+  "limit": 20
+}
+```
+
+`source_label` may be:
+
+```text
+POST
+COMMENT
+```
+
+`telegram.sources_remove` supports purge:
+
+```json
+{
+  "id": "mpwb_chat",
+  "purge": true
+}
+```
+
+With `purge: true`, local messages, source state, and source-scoped exclusions are deleted before the source config is removed.
+
+
 ## MCP sync
 
 The MCP tool `telegram.sync` now runs the same MTProto sync logic as the CLI.

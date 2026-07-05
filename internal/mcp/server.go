@@ -68,17 +68,22 @@ type sourceAddInput struct {
 }
 
 type sourceRemoveInput struct {
-	ID string `json:"id" jsonschema:"Stable local source id"`
+	ID    string `json:"id" jsonschema:"Stable local source id"`
+	Purge bool   `json:"purge,omitempty" jsonschema:"Also delete source state, stored messages, and source-scoped exclusions"`
 }
 
 type messagesRecentInput struct {
-	Limit         int  `json:"limit,omitempty" jsonschema:"Maximum number of messages, default 50, maximum 200"`
-	IncludeHidden bool `json:"include_hidden,omitempty" jsonschema:"Include messages hidden by spam exclusion"`
+	Limit         int    `json:"limit,omitempty" jsonschema:"Maximum number of messages, default 50, maximum 200"`
+	SourceID      string `json:"source_id,omitempty" jsonschema:"Optional source id filter"`
+	SourceLabel   string `json:"source_label,omitempty" jsonschema:"Optional source label filter: POST or COMMENT"`
+	IncludeHidden bool   `json:"include_hidden,omitempty" jsonschema:"Include messages hidden by spam exclusion"`
 }
 
 type messagesSearchInput struct {
 	Query         string `json:"query" jsonschema:"Case-insensitive text search query"`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Maximum number of messages, default 50, maximum 200"`
+	SourceID      string `json:"source_id,omitempty" jsonschema:"Optional source id filter"`
+	SourceLabel   string `json:"source_label,omitempty" jsonschema:"Optional source label filter: POST or COMMENT"`
 	IncludeHidden bool   `json:"include_hidden,omitempty" jsonschema:"Include messages hidden by spam exclusion"`
 }
 
@@ -162,17 +167,41 @@ func registerTools(server *mcpsdk.Server, deps ServerDeps) {
 		if id == "" {
 			return nil, nil, fmt.Errorf("source id is required")
 		}
+		if input.Purge {
+			source, found, err := deps.Sources.Get(ctx, id)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !found {
+				return nil, nil, fmt.Errorf("source %q not found", id)
+			}
+
+			purged, err := deps.Sources.Purge(ctx, id)
+			if err != nil {
+				return nil, nil, err
+			}
+			return nil, map[string]any{
+				"removed":                  true,
+				"id":                       id,
+				"source":                   mapSource(source),
+				"purged":                   true,
+				"messages":                 purged.Messages,
+				"source_states":            purged.SourceStates,
+				"source_scoped_exclusions": purged.SourceScopedExclusions,
+			}, nil
+		}
+
 		if err := deps.Sources.Remove(ctx, id); err != nil {
 			return nil, nil, err
 		}
-		return nil, map[string]any{"removed": true, "id": id}, nil
+		return nil, map[string]any{"removed": true, "id": id, "purged": false}, nil
 	})
 
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        "telegram.messages_recent",
 		Description: "Return recent non-hidden Telegram messages.",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, input *messagesRecentInput) (*mcpsdk.CallToolResult, any, error) {
-		items, err := deps.Messages.Recent(ctx, input.Limit, input.IncludeHidden)
+		items, err := deps.Messages.RecentFiltered(ctx, input.Limit, input.IncludeHidden, mcpMessageFilter(input.SourceID, input.SourceLabel))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -183,7 +212,7 @@ func registerTools(server *mcpsdk.Server, deps ServerDeps) {
 		Name:        "telegram.messages_search",
 		Description: "Search stored non-hidden Telegram messages.",
 	}, func(ctx context.Context, req *mcpsdk.CallToolRequest, input *messagesSearchInput) (*mcpsdk.CallToolResult, any, error) {
-		items, err := deps.Messages.Search(ctx, input.Query, input.Limit, input.IncludeHidden)
+		items, err := deps.Messages.SearchFiltered(ctx, input.Query, input.Limit, input.IncludeHidden, mcpMessageFilter(input.SourceID, input.SourceLabel))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -308,6 +337,13 @@ func registerTools(server *mcpsdk.Server, deps ServerDeps) {
 
 		return nil, map[string]any{"results": mapSyncResults(results)}, nil
 	})
+}
+
+func mcpMessageFilter(sourceID string, sourceLabel string) messages.Filter {
+	return messages.Filter{
+		SourceID:    strings.TrimSpace(sourceID),
+		SourceLabel: domain.SourceLabel(strings.ToUpper(strings.TrimSpace(sourceLabel))),
+	}
 }
 
 func filterEnabledSources(items []domain.Source, sourceID string) []domain.Source {
