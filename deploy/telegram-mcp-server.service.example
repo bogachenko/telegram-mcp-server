@@ -8,15 +8,7 @@ Type=simple
 User=i-b8o
 Group=i-b8o
 WorkingDirectory=/home/i-b8o/src/github.com/bogachenko/telegram-mcp-server
-
-# Non-secret runtime settings.
-# Keep these here instead of /etc/telegram-mcp-server.env.
-Environment=TGMCP_LISTEN_ADDR=127.0.0.1:1984
-Environment=TGMCP_PUBLIC_BASE_URL=https://tg-mcp.elektrosila-avtomatika.store
-
-# Secrets live in the service user's home directory, not in git and not in /etc.
-EnvironmentFile=-/home/i-b8o/.config/telegram-mcp-server/env
-
+EnvironmentFile=/etc/telegram-mcp-server.env
 ExecStart=/usr/local/bin/telegram-mcp-server serve
 Restart=on-failure
 RestartSec=5
