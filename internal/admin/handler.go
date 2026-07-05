@@ -787,12 +787,22 @@ const adminHTML = `<!doctype html>
 <body>
 <header><div class="wrap top"><div><h1>Telegram MCP Admin</h1><div class="subtitle">Чаты, сообщения и локальный spam-list</div></div><form method="post" action="/admin/logout"><button class="secondary" type="submit">Выйти</button></form></div></header>
 <main>
-<section class="card"><h2>Чаты / источники</h2>
+<div class="card" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+  <div>
+    <h2 style="margin:0">Панель управления</h2>
+    <div class="small">Чаты отдельно от сообщений и spam-list.</div>
+  </div>
+  <div class="row">
+    <button id="tab-sources" onclick="showAdminPage('sources')">Чаты</button>
+    <button id="tab-messages" class="secondary" onclick="showAdminPage('messages')">Сообщения и spam-list</button>
+  </div>
+</div>
+<section id="admin-page-sources" class="card admin-page"><h2>Чаты / источники</h2>
 <div class="form-grid"><label>ID<input id="source-id" placeholder="mpwb_chat"></label><label>Тип<select id="source-type"><option value="group">group</option><option value="channel">channel</option></select></label><label>Entity ref<input id="source-entity" placeholder="mpwb_chat или numeric id"></label><label>Title<input id="source-title" placeholder="Название"></label><label>Public username<input id="source-public" placeholder="без @, можно пусто"></label><label>Enabled<select id="source-enabled"><option value="true">true</option><option value="false">false</option></select></label></div>
 <div class="row" style="margin-top:12px"><button onclick="saveSource()">Добавить / обновить</button><button class="secondary" onclick="loadAll()">Обновить</button><button class="secondary" onclick="syncAll()">Обновить все</button></div>
 <div style="margin-top:16px"><label>Массовый импорт JSON<textarea id="sources-import-json" placeholder='{"channels":[...],"groups":[...]}'></textarea></label><div class="row" style="margin-top:10px"><button class="secondary" onclick="importSources()">Импортировать JSON</button><span class="small">Поддерживает массивы channels и groups.</span></div></div>
 <div style="overflow:auto;margin-top:14px"><table><thead><tr><th>ID</th><th>Тип</th><th>Entity</th><th>Title</th><th>Статус</th><th>Действия</th></tr></thead><tbody id="sources-body"></tbody></table></div></section>
-<section class="grid">
+<section id="admin-page-messages" class="grid admin-page" style="display:none">
 <div class="card"><h2>Сообщения</h2><div class="form-grid"><label>Source<select id="message-source"></select></label><label>Label<select id="message-label"><option value="">all</option><option value="POST">POST</option><option value="COMMENT">COMMENT</option></select></label><label>Limit<input id="message-limit" type="number" value="30" min="1" max="200"></label></div><div class="row" style="margin-top:10px"><input id="message-query" placeholder="Поиск по тексту" style="flex:1;min-width:220px"><button onclick="loadRecent()">Последние</button><button class="secondary" onclick="searchMessages()">Искать</button></div><div id="messages" class="messages" style="margin-top:12px"></div></div>
 <div class="card"><h2>Spam list</h2><div class="form-grid"><label>Sender ID<input id="spam-sender-id" placeholder="8303990114"></label><label>Username<input id="spam-username" placeholder="@username"></label><label>Scope<select id="spam-scope"><option value="global">global</option><option value="source">source</option></select></label><label>Source ID<input id="spam-source-id" placeholder="mpwb_chat"></label><label style="grid-column:span 2;">Reason<input id="spam-reason" placeholder="spam / irrelevant / noisy"></label></div><div class="row" style="margin-top:10px"><button onclick="addSpamSender()">Добавить в спам</button><button class="secondary" onclick="loadSpam()">Обновить</button></div><div style="overflow:auto;margin-top:14px"><table><thead><tr><th>Sender</th><th>Scope</th><th>Reason</th><th>Действия</th></tr></thead><tbody id="spam-body"></tbody></table></div></div>
 </section>
@@ -800,12 +810,29 @@ const adminHTML = `<!doctype html>
 <div id="status" class="status"></div>
 <script>
 let sources=[];
+function showAdminPage(page){
+  const sourcesPage=document.getElementById('admin-page-sources');
+  const messagesPage=document.getElementById('admin-page-messages');
+  const sourcesTab=document.getElementById('tab-sources');
+  const messagesTab=document.getElementById('tab-messages');
+
+  if(sourcesPage)sourcesPage.style.display=page==='sources'?'':'none';
+  if(messagesPage)messagesPage.style.display=page==='messages'?'':'none';
+
+  if(sourcesTab)sourcesTab.className=page==='sources'?'':'secondary';
+  if(messagesTab)messagesTab.className=page==='messages'?'':'secondary';
+
+  if(page==='messages'){
+    loadRecent().catch(err=>show(err.message,true));
+    loadSpam().catch(err=>show(err.message,true));
+  }
+}
 function api(path,options){options=options||{};options.headers=Object.assign({'Content-Type':'application/json'},options.headers||{});return fetch(path,options).then(async(res)=>{if(res.status===401){location.href='/admin/login';throw new Error('unauthorized')}const text=await res.text();const data=text?JSON.parse(text):{};if(!res.ok)throw new Error(data.error||res.statusText);return data})}
 function show(message,isError){const box=document.getElementById('status');box.textContent=message;box.className='status'+(isError?' error':'');box.style.display='block';clearTimeout(window._statusTimer);window._statusTimer=setTimeout(()=>box.style.display='none',4200)}
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function js(v){return String(v==null?'':v).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}
 function qs(params){return Object.entries(params).filter(([,v])=>v!==''&&v!=null).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&')}
-async function loadAll(){await loadSources();await Promise.all([loadSpam(),loadRecent()])}
+async function loadAll(){await loadSources()}
 async function loadSources(){const data=await api('/admin/api/sources');sources=data.sources||[];renderSources();renderSourceSelects()}
 function renderSources(){const body=document.getElementById('sources-body');body.innerHTML=sources.map(s=>'<tr><td><b>'+esc(s.id)+'</b></td><td>'+esc(s.type)+'</td><td>'+esc(s.entity_ref)+'</td><td>'+esc(s.title)+'</td><td><span class="pill">'+(s.enabled?'enabled':'disabled')+'</span></td><td><div class="actions"><button class="secondary" onclick="syncSource(\''+js(s.id)+'\',0)">Обновить</button><button class="secondary" onclick="syncSource(\''+js(s.id)+'\',20)">Загрузить последние 20</button><button class="danger" onclick="removeSource(\''+js(s.id)+'\',false)">Удалить из списка</button><button class="danger" onclick="removeSource(\''+js(s.id)+'\',true)">Удалить с данными</button></div></td></tr>').join('')}
 function renderSourceSelects(){const select=document.getElementById('message-source');const current=select.value;select.innerHTML='<option value="">all</option>'+sources.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.id)+'</option>').join('');select.value=current}
