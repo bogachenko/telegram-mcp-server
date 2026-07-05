@@ -34,6 +34,7 @@ func NewHTTPHandler(deps ServerDeps) http.Handler {
 	}, nil)
 
 	registerTools(server, deps)
+	registerResources(server, deps)
 
 	mux := http.NewServeMux()
 	registerOAuthHTTPHandlers(mux)

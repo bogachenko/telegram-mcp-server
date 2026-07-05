@@ -191,6 +191,29 @@ COMMENT
 With `purge: true`, local messages, source state, and source-scoped exclusions are deleted before the source config is removed.
 
 
+## MCP resources
+
+The server exposes JSON resources:
+
+```text
+telegram://sources
+telegram://messages/recent
+telegram://source/{id}/messages
+telegram://message/{external_id}
+telegram://spam-list
+telegram://spam-list/global
+telegram://spam-list/source/{source_id}
+```
+
+Examples:
+
+```text
+telegram://source/mpwb_chat/messages
+telegram://message/telegram:POST:mpwb_chat:26782
+telegram://spam-list/source/mpwb_chat
+```
+
+
 ## MCP sync
 
 The MCP tool `telegram.sync` now runs the same MTProto sync logic as the CLI.
