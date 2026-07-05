@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bogachenko/telegram-mcp-server/internal/domain"
@@ -15,9 +18,17 @@ import (
 )
 
 const (
-	defaultWatchIntervalSeconds = 300
-	defaultWatchLimit           = 1000
+	defaultWatchIntervalSeconds  = 300
+	defaultWatchLimit            = 1000
+	sourceErrorDisableThreshold  = 3
+	floodWaitExtraPauseSeconds   = 5
+	floodWaitMinimumPauseSeconds = 1800
 )
+
+var floodWaitPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`FLOOD_WAIT \((\d+)\)`),
+	regexp.MustCompile(`FLOOD_WAIT_(\d+)`),
+}
 
 func startTelegramWatcher(
 	ctx context.Context,
@@ -82,9 +93,9 @@ func runTelegramWatcherSync(
 		return
 	}
 
-	selected := enabledSources(items)
+	selected, skippedPaused := watcherReadySources(items, time.Now())
 	if len(selected) == 0 {
-		_, _ = fmt.Fprintln(stdout, "telegram watcher skipped: no enabled sources")
+		_, _ = fmt.Fprintf(stdout, "telegram watcher skipped: no ready sources paused=%d\n", skippedPaused)
 		return
 	}
 
@@ -94,17 +105,21 @@ func runTelegramWatcherSync(
 		Messages:   messageRepo,
 		Exclusions: exclusionService,
 	}, tgclient.SyncOptions{
-		Limit: limit,
+		Limit:           limit,
+		StopOnFloodWait: true,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stdout, "telegram watcher sync error: %v\n", err)
 		return
 	}
 
+	updateSourceHealth(ctx, stdout, sourceRepo, results)
+
 	var saved int
 	var comments int
 	var errors int
 	var truncated int
+	var floodWaits int
 	for _, result := range results {
 		saved += result.SavedMessages
 		comments += result.SavedComments
@@ -114,15 +129,21 @@ func runTelegramWatcherSync(
 		if result.Truncated || result.CommentsTruncated {
 			truncated++
 		}
+		if isFloodWaitError(result.Error) {
+			floodWaits++
+		}
 	}
 
 	_, _ = fmt.Fprintf(
 		stdout,
-		"telegram watcher sync done sources=%d saved=%d comments=%d errors=%d truncated=%d duration=%s\n",
+		"telegram watcher sync done sources=%d ready=%d paused=%d saved=%d comments=%d errors=%d flood_waits=%d truncated=%d duration=%s\n",
 		len(results),
+		len(selected),
+		skippedPaused,
 		saved,
 		comments,
 		errors,
+		floodWaits,
 		truncated,
 		time.Since(started).Round(time.Millisecond),
 	)
@@ -149,12 +170,104 @@ func runTelegramWatcherSync(
 	}
 }
 
-func enabledSources(items []domain.Source) []domain.Source {
-	result := make([]domain.Source, 0, len(items))
-	for _, item := range items {
-		if item.Enabled {
-			result = append(result, item)
+func updateSourceHealth(ctx context.Context, stdout io.Writer, sourceRepo *sources.Repository, results []tgclient.SourceSyncResult) {
+	now := time.Now()
+
+	for _, result := range results {
+		if result.Error == "" {
+			if err := sourceRepo.MarkHealthy(ctx, result.Source.ID); err != nil {
+				_, _ = fmt.Fprintf(stdout, "telegram watcher source health success update error source=%s error=%v\n", result.Source.ID, err)
+			}
+			continue
+		}
+
+		pauseUntil := sourcePauseUntil(now, result.Error)
+		disable := shouldDisableSource(result.Source, result.Error)
+		if err := sourceRepo.MarkUnhealthy(ctx, result.Source.ID, result.Error, pauseUntil, disable); err != nil {
+			_, _ = fmt.Fprintf(stdout, "telegram watcher source health error update error source=%s error=%v\n", result.Source.ID, err)
+			continue
+		}
+
+		if disable {
+			_, _ = fmt.Fprintf(stdout, "telegram watcher source disabled source=%s error_count=%d error=%s\n", result.Source.ID, result.Source.ErrorCount+1, result.Error)
+		}
+		if !pauseUntil.IsZero() {
+			_, _ = fmt.Fprintf(stdout, "telegram watcher source paused source=%s until=%s error=%s\n", result.Source.ID, pauseUntil.UTC().Format(time.RFC3339), result.Error)
 		}
 	}
-	return result
+}
+
+func watcherReadySources(items []domain.Source, now time.Time) ([]domain.Source, int) {
+	result := make([]domain.Source, 0, len(items))
+	skippedPaused := 0
+
+	for _, item := range items {
+		if !item.Enabled {
+			continue
+		}
+		if !item.PausedUntil.IsZero() && item.PausedUntil.After(now) {
+			skippedPaused++
+			continue
+		}
+		result = append(result, item)
+	}
+
+	return result, skippedPaused
+}
+
+func shouldDisableSource(source domain.Source, message string) bool {
+	if isFloodWaitError(message) {
+		return false
+	}
+	if !isPermanentSourceError(message) {
+		return false
+	}
+	return source.ErrorCount+1 >= sourceErrorDisableThreshold
+}
+
+func isPermanentSourceError(message string) bool {
+	value := strings.ToLower(message)
+	for _, marker := range []string{
+		"username_not_occupied",
+		"contact not found",
+		"chat_id_invalid",
+		"can't resolve peerchannel",
+	} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func sourcePauseUntil(now time.Time, message string) time.Time {
+	seconds, ok := floodWaitSeconds(message)
+	if !ok {
+		return time.Time{}
+	}
+	pauseSeconds := seconds + floodWaitExtraPauseSeconds
+	if pauseSeconds < floodWaitMinimumPauseSeconds {
+		pauseSeconds = floodWaitMinimumPauseSeconds
+	}
+	return now.Add(time.Duration(pauseSeconds) * time.Second)
+}
+
+func isFloodWaitError(message string) bool {
+	_, ok := floodWaitSeconds(message)
+	return ok
+}
+
+func floodWaitSeconds(message string) (int, bool) {
+	for _, pattern := range floodWaitPatterns {
+		matches := pattern.FindStringSubmatch(message)
+		if len(matches) != 2 {
+			continue
+		}
+		seconds, err := strconv.Atoi(matches[1])
+		if err != nil {
+			continue
+		}
+		return seconds, true
+	}
+	return 0, false
 }
