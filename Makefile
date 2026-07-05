@@ -9,3 +9,7 @@ openapi:
 	bash scripts/openapi_check.sh
 
 openapi-check: openapi
+
+mcp-run:
+	./scripts/mcp-run.sh
+
