@@ -188,6 +188,9 @@ func (a *App) PrintStatus(stdout io.Writer) error {
 			"public base URL: %s\n"+
 			"mcp endpoint: /mcp\n"+
 			"health endpoint: /healthz\n"+
+			"watch enabled: %t\n"+
+			"watch interval seconds: %d\n"+
+			"watch limit: %d\n"+
 			"mcp tools planned: %d\n",
 		a.config.DataDir,
 		a.config.DatabasePath,
@@ -197,6 +200,9 @@ func (a *App) PrintStatus(stdout io.Writer) error {
 		a.config.TelegramPhone != "",
 		a.config.ListenAddr,
 		displayPublicBaseURL(a.config.PublicBaseURL),
+		a.config.WatchEnabled,
+		a.config.WatchIntervalSeconds,
+		a.config.WatchLimit,
 		len(a.tools),
 	)
 	if err != nil {
@@ -234,6 +240,20 @@ func (a *App) Serve(ctx context.Context, stdout io.Writer) error {
 		APIHash:     a.config.TelegramAPIHash,
 		SessionPath: a.config.TelegramSessionPath,
 	})
+
+	if a.config.WatchEnabled {
+		startTelegramWatcher(
+			ctx,
+			stdout,
+			sourceRepo,
+			messageRepo,
+			exclusionService,
+			stateRepo,
+			telegramClient,
+			a.config.WatchIntervalSeconds,
+			a.config.WatchLimit,
+		)
+	}
 
 	handler := mcp.NewHTTPHandler(mcp.ServerDeps{
 		Sources:          sourceRepo,

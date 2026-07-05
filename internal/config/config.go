@@ -15,16 +15,19 @@ const (
 
 // Config contains runtime paths and non-secret settings.
 type Config struct {
-	DataDir             string
-	DatabasePath        string
-	TelegramSessionDir  string
-	TelegramSessionPath string
-	TelegramAPIID       int
-	TelegramAPIHash     string
-	TelegramPhone       string
-	TelegramPassword    string
-	ListenAddr          string
-	PublicBaseURL       string
+	DataDir              string
+	DatabasePath         string
+	TelegramSessionDir   string
+	TelegramSessionPath  string
+	TelegramAPIID        int
+	TelegramAPIHash      string
+	TelegramPhone        string
+	TelegramPassword     string
+	ListenAddr           string
+	PublicBaseURL        string
+	WatchEnabled         bool
+	WatchIntervalSeconds int
+	WatchLimit           int
 }
 
 // LoadFromEnv reads configuration from environment variables.
@@ -55,16 +58,19 @@ func LoadFromEnv() Config {
 	}
 
 	return Config{
-		DataDir:             dataDir,
-		DatabasePath:        databasePath,
-		TelegramSessionDir:  sessionDir,
-		TelegramSessionPath: sessionPath,
-		TelegramAPIID:       intFromEnv("TGMCP_TELEGRAM_API_ID"),
-		TelegramAPIHash:     strings.TrimSpace(os.Getenv("TGMCP_TELEGRAM_API_HASH")),
-		TelegramPhone:       strings.TrimSpace(os.Getenv("TGMCP_TELEGRAM_PHONE")),
-		TelegramPassword:    strings.TrimSpace(os.Getenv("TGMCP_TELEGRAM_PASSWORD")),
-		ListenAddr:          listenAddr,
-		PublicBaseURL:       firstNonEmptyEnv("TGMCP_PUBLIC_BASE_URL", "MCP_PUBLIC_BASE_URL"),
+		DataDir:              dataDir,
+		DatabasePath:         databasePath,
+		TelegramSessionDir:   sessionDir,
+		TelegramSessionPath:  sessionPath,
+		TelegramAPIID:        intFromEnv("TGMCP_TELEGRAM_API_ID"),
+		TelegramAPIHash:      strings.TrimSpace(os.Getenv("TGMCP_TELEGRAM_API_HASH")),
+		TelegramPhone:        strings.TrimSpace(os.Getenv("TGMCP_TELEGRAM_PHONE")),
+		TelegramPassword:     strings.TrimSpace(os.Getenv("TGMCP_TELEGRAM_PASSWORD")),
+		ListenAddr:           listenAddr,
+		PublicBaseURL:        firstNonEmptyEnv("TGMCP_PUBLIC_BASE_URL", "MCP_PUBLIC_BASE_URL"),
+		WatchEnabled:         boolFromEnv("TGMCP_WATCH_ENABLED"),
+		WatchIntervalSeconds: intFromEnvDefault("TGMCP_WATCH_INTERVAL_SECONDS", 300),
+		WatchLimit:           intFromEnvDefault("TGMCP_WATCH_LIMIT", 1000),
 	}
 }
 
@@ -75,6 +81,27 @@ func firstNonEmptyEnv(names ...string) string {
 		}
 	}
 	return ""
+}
+
+func intFromEnvDefault(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func boolFromEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func intFromEnv(name string) int {
