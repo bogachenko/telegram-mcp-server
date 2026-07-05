@@ -191,6 +191,25 @@ COMMENT
 With `purge: true`, local messages, source state, and source-scoped exclusions are deleted before the source config is removed.
 
 
+## Admin web UI
+
+When the server is running, open:
+
+```text
+http://127.0.0.1:1984/admin
+```
+
+Login uses the same owner token as OAuth:
+
+```bash
+cat "$HOME/.config/telegram-mcp-server/oauth-owner-token"
+```
+
+The admin UI has no frontend build step. It can add, update, remove and purge Telegram sources, run sync/backfill, view recent/search messages, and maintain the local spam list.
+
+Do not expose `/admin` without `TGMCP_OAUTH_OWNER_TOKEN`.
+
+
 ## MCP resources
 
 The server exposes JSON resources:

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogachenko/telegram-mcp-server/internal/admin"
 	"github.com/bogachenko/telegram-mcp-server/internal/domain"
 	"github.com/bogachenko/telegram-mcp-server/internal/exclusions"
 	"github.com/bogachenko/telegram-mcp-server/internal/messages"
@@ -53,6 +54,17 @@ func NewHTTPHandler(deps ServerDeps) http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
+
+	adminHandler := admin.NewHandler(admin.Deps{
+		Sources:          deps.Sources,
+		Messages:         deps.Messages,
+		Exclusions:       deps.Exclusions,
+		ExclusionService: deps.ExclusionService,
+		States:           deps.States,
+		Telegram:         deps.Telegram,
+	})
+	mux.Handle("/admin", adminHandler)
+	mux.Handle("/admin/", adminHandler)
 
 	return mux
 }
