@@ -23,6 +23,15 @@ func TestResourceURIParsers(t *testing.T) {
 		t.Fatalf("spam source id = %q, %t", sourceID, ok)
 	}
 
+	externalID, ok = messagePathResourceExternalID("telegram://message/POST/mpwb_chat/26782")
+	if !ok || externalID != "telegram:POST:mpwb_chat:26782" {
+		t.Fatalf("path external id = %q, %t", externalID, ok)
+	}
+
+	if _, ok := messagePathResourceExternalID("telegram://message/BAD/mpwb_chat/26782"); ok {
+		t.Fatal("bad source label parsed successfully")
+	}
+
 	if _, ok := sourceMessagesResourceID("telegram://source/mpwb_chat"); ok {
 		t.Fatal("source messages URI without /messages parsed successfully")
 	}

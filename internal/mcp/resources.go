@@ -92,6 +92,33 @@ func registerResources(server *mcpsdk.Server, deps ServerDeps) {
 		})
 	})
 
+	server.AddResourceTemplate(&mcpsdk.ResourceTemplate{
+		URITemplate: "telegram://message/{source_label}/{source_id}/{message_id}",
+		Name:        "telegram.message.by_parts",
+		Title:       "Telegram Message By Parts",
+		Description: "One stored Telegram message by source label, source id, and message id.",
+		MIMEType:    resourceMIMEJSON,
+	}, func(ctx context.Context, req *mcpsdk.ReadResourceRequest) (*mcpsdk.ReadResourceResult, error) {
+		uri := readResourceURI(req, "")
+		externalID, ok := messagePathResourceExternalID(uri)
+		if !ok {
+			return nil, mcpsdk.ResourceNotFoundError(uri)
+		}
+
+		message, found, err := deps.Messages.Get(ctx, externalID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, mcpsdk.ResourceNotFoundError(uri)
+		}
+		return jsonResource(uri, map[string]any{
+			"found":       true,
+			"external_id": externalID,
+			"message":     mapMessage(message),
+		})
+	})
+
 	server.AddResource(&mcpsdk.Resource{
 		URI:         "telegram://spam-list",
 		Name:        "telegram.spam_list",
@@ -187,6 +214,53 @@ func messageResourceExternalID(uri string) (string, bool) {
 
 	value, ok := pathResourceValue(uri, prefix, "")
 	return value, ok
+}
+
+func messagePathResourceExternalID(uri string) (string, bool) {
+	const prefix = "telegram://message/"
+
+	if !strings.HasPrefix(uri, prefix) {
+		return "", false
+	}
+
+	value := strings.Trim(strings.TrimPrefix(uri, prefix), "/")
+	parts := strings.Split(value, "/")
+	if len(parts) != 3 {
+		return "", false
+	}
+
+	sourceLabel, ok := cleanPathPart(parts[0])
+	if !ok {
+		return "", false
+	}
+	sourceID, ok := cleanPathPart(parts[1])
+	if !ok {
+		return "", false
+	}
+	messageID, ok := cleanPathPart(parts[2])
+	if !ok {
+		return "", false
+	}
+
+	sourceLabel = strings.ToUpper(sourceLabel)
+	if sourceLabel != string(domain.SourceLabelPost) && sourceLabel != string(domain.SourceLabelComment) {
+		return "", false
+	}
+
+	return fmt.Sprintf("telegram:%s:%s:%s", sourceLabel, sourceID, messageID), true
+}
+
+func cleanPathPart(value string) (string, bool) {
+	decoded, err := url.PathUnescape(strings.TrimSpace(value))
+	if err != nil {
+		return "", false
+	}
+
+	decoded = strings.TrimSpace(decoded)
+	if decoded == "" || strings.Contains(decoded, "/") {
+		return "", false
+	}
+	return decoded, true
 }
 
 func spamListSourceResourceID(uri string) (string, bool) {

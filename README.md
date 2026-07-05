@@ -200,6 +200,7 @@ telegram://sources
 telegram://messages/recent
 telegram://source/{id}/messages
 telegram://message/{external_id}
+telegram://message/{source_label}/{source_id}/{message_id}
 telegram://spam-list
 telegram://spam-list/global
 telegram://spam-list/source/{source_id}
@@ -209,7 +210,8 @@ Examples:
 
 ```text
 telegram://source/mpwb_chat/messages
-telegram://message/telegram:POST:mpwb_chat:26782
+telegram://message/POST/mpwb_chat/26782
+telegram://message/telegram%3APOST%3Ampwb_chat%3A26782
 telegram://spam-list/source/mpwb_chat
 ```
 
