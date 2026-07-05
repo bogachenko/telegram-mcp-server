@@ -38,6 +38,7 @@ func startTelegramWatcher(
 	exclusionService *exclusions.Service,
 	stateRepo *state.Repository,
 	telegramClient *tgclient.Client,
+	notifier *telegramNotifier,
 	intervalSeconds int,
 	limit int,
 ) {
@@ -54,9 +55,9 @@ func startTelegramWatcher(
 	interval := time.Duration(intervalSeconds) * time.Second
 
 	go func() {
-		_, _ = fmt.Fprintf(stdout, "telegram watcher enabled interval=%s limit=%d\n", interval, limit)
+		_, _ = fmt.Fprintf(stdout, "telegram watcher enabled interval=%s limit=%d notify=%t\n", interval, limit, notifier != nil)
 
-		runTelegramWatcherSync(ctx, stdout, sourceRepo, messageRepo, exclusionService, stateRepo, telegramClient, limit)
+		runTelegramWatcherSync(ctx, stdout, sourceRepo, messageRepo, exclusionService, stateRepo, telegramClient, notifier, limit)
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -66,7 +67,7 @@ func startTelegramWatcher(
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				runTelegramWatcherSync(ctx, stdout, sourceRepo, messageRepo, exclusionService, stateRepo, telegramClient, limit)
+				runTelegramWatcherSync(ctx, stdout, sourceRepo, messageRepo, exclusionService, stateRepo, telegramClient, notifier, limit)
 			}
 		}
 	}()
@@ -80,6 +81,7 @@ func runTelegramWatcherSync(
 	exclusionService *exclusions.Service,
 	stateRepo *state.Repository,
 	telegramClient *tgclient.Client,
+	notifier *telegramNotifier,
 	limit int,
 ) {
 	if sourceRepo == nil || messageRepo == nil || exclusionService == nil || stateRepo == nil || telegramClient == nil {
@@ -114,6 +116,7 @@ func runTelegramWatcherSync(
 	}
 
 	updateSourceHealth(ctx, stdout, sourceRepo, results)
+	sendWatcherNotification(ctx, stdout, notifier, results)
 
 	var saved int
 	var comments int
@@ -194,6 +197,15 @@ func updateSourceHealth(ctx context.Context, stdout io.Writer, sourceRepo *sourc
 		if !pauseUntil.IsZero() {
 			_, _ = fmt.Fprintf(stdout, "telegram watcher source paused source=%s until=%s error=%s\n", result.Source.ID, pauseUntil.UTC().Format(time.RFC3339), result.Error)
 		}
+	}
+}
+
+func sendWatcherNotification(ctx context.Context, stdout io.Writer, notifier *telegramNotifier, results []tgclient.SourceSyncResult) {
+	if notifier == nil {
+		return
+	}
+	if err := notifier.SendWatcherSummary(ctx, results); err != nil {
+		_, _ = fmt.Fprintf(stdout, "telegram watcher notify error: %v\n", err)
 	}
 }
 

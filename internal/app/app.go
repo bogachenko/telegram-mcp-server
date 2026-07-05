@@ -191,6 +191,7 @@ func (a *App) PrintStatus(stdout io.Writer) error {
 			"watch enabled: %t\n"+
 			"watch interval seconds: %d\n"+
 			"watch limit: %d\n"+
+			"notify enabled: %t\n"+
 			"mcp tools planned: %d\n",
 		a.config.DataDir,
 		a.config.DatabasePath,
@@ -203,6 +204,7 @@ func (a *App) PrintStatus(stdout io.Writer) error {
 		a.config.WatchEnabled,
 		a.config.WatchIntervalSeconds,
 		a.config.WatchLimit,
+		a.config.TelegramBotToken != "" && a.config.TelegramChatID != "",
 		len(a.tools),
 	)
 	if err != nil {
@@ -250,6 +252,7 @@ func (a *App) Serve(ctx context.Context, stdout io.Writer) error {
 			exclusionService,
 			stateRepo,
 			telegramClient,
+			newTelegramNotifier(a.config.TelegramBotToken, a.config.TelegramChatID, a.config.PublicBaseURL),
 			a.config.WatchIntervalSeconds,
 			a.config.WatchLimit,
 		)

@@ -25,6 +25,8 @@ type Config struct {
 	TelegramPassword     string
 	ListenAddr           string
 	PublicBaseURL        string
+	TelegramBotToken     string
+	TelegramChatID       string
 	WatchEnabled         bool
 	WatchIntervalSeconds int
 	WatchLimit           int
@@ -68,6 +70,8 @@ func LoadFromEnv() Config {
 		TelegramPassword:     strings.TrimSpace(os.Getenv("TGMCP_TELEGRAM_PASSWORD")),
 		ListenAddr:           listenAddr,
 		PublicBaseURL:        firstNonEmptyEnv("TGMCP_PUBLIC_BASE_URL", "MCP_PUBLIC_BASE_URL"),
+		TelegramBotToken:     firstNonEmptyEnv("TELEGRAM_BOT_TOKEN", "TGMCP_NOTIFY_BOT_TOKEN", "TGMCP_TELEGRAM_BOT_TOKEN"),
+		TelegramChatID:       firstNonEmptyEnv("TELEGRAM_CHAT_ID", "TGMCP_NOTIFY_CHAT_ID", "TGMCP_TELEGRAM_CHAT_ID"),
 		WatchEnabled:         boolFromEnv("TGMCP_WATCH_ENABLED"),
 		WatchIntervalSeconds: intFromEnvDefault("TGMCP_WATCH_INTERVAL_SECONDS", 300),
 		WatchLimit:           intFromEnvDefault("TGMCP_WATCH_LIMIT", 1000),
