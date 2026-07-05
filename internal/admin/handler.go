@@ -765,8 +765,13 @@ func mapAddResult(result exclusions.AddResult) map[string]any {
 }
 
 func escapeHTML(value string) string {
-	replacer := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`+"`"+`, "&#34;", "'", "&#39;")
-	return replacer.Replace(value)
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&#34;",
+		"'", "&#39;",
+	).Replace(value)
 }
 
 const adminHTML = `<!doctype html>
