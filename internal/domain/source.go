@@ -1,6 +1,8 @@
 // Package domain contains core Telegram MCP models.
 package domain
 
+import "time"
+
 // SourceType identifies the kind of Telegram source.
 type SourceType string
 
@@ -23,4 +25,8 @@ type Source struct {
 	PublicUsername string
 	Title          string
 	Enabled        bool
+	LastError      string
+	LastErrorAt    time.Time
+	ErrorCount     int
+	PausedUntil    time.Time
 }

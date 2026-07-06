@@ -720,6 +720,13 @@ func sanitizeSourceID(value string) string {
 	return strings.Trim(builder.String(), "_")
 }
 
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
 func mapSources(items []domain.Source) []map[string]any {
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
@@ -729,9 +736,19 @@ func mapSources(items []domain.Source) []map[string]any {
 }
 
 func mapSource(item domain.Source) map[string]any {
-	return map[string]any{"id": item.ID, "type": string(item.Type), "entity_ref": item.EntityRef, "public_username": item.PublicUsername, "title": item.Title, "enabled": item.Enabled}
+	return map[string]any{
+		"id":              item.ID,
+		"type":            string(item.Type),
+		"entity_ref":      item.EntityRef,
+		"public_username": item.PublicUsername,
+		"title":           item.Title,
+		"enabled":         item.Enabled,
+		"last_error":      item.LastError,
+		"last_error_at":   formatOptionalTime(item.LastErrorAt),
+		"error_count":     item.ErrorCount,
+		"paused_until":    formatOptionalTime(item.PausedUntil),
+	}
 }
-
 func mapMessages(items []domain.Message) []map[string]any {
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
@@ -832,9 +849,18 @@ function show(message,isError){const box=document.getElementById('status');box.t
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function js(v){return String(v==null?'':v).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}
 function qs(params){return Object.entries(params).filter(([,v])=>v!==''&&v!=null).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&')}
+function sourceStatus(s){
+  let text=s.enabled?'enabled':'disabled';
+  if(s.paused_until)text+=' · paused';
+  if(s.error_count)text+=' · errors '+s.error_count;
+  let html='<span class="pill">'+esc(text)+'</span>';
+  if(s.paused_until)html+='<div class="small">paused until: '+esc(s.paused_until)+'</div>';
+  if(s.last_error)html+='<div class="small">'+esc(s.last_error)+'</div>';
+  return html;
+}
 async function loadAll(){await loadSources()}
 async function loadSources(){const data=await api('/admin/api/sources');sources=data.sources||[];renderSources();renderSourceSelects()}
-function renderSources(){const body=document.getElementById('sources-body');body.innerHTML=sources.map(s=>'<tr><td><b>'+esc(s.id)+'</b></td><td>'+esc(s.type)+'</td><td>'+esc(s.entity_ref)+'</td><td>'+esc(s.title)+'</td><td><span class="pill">'+(s.enabled?'enabled':'disabled')+'</span></td><td><div class="actions"><button class="secondary" onclick="syncSource(\''+js(s.id)+'\',0)">Обновить</button><button class="secondary" onclick="syncSource(\''+js(s.id)+'\',20)">Загрузить последние 20</button><button class="danger" onclick="removeSource(\''+js(s.id)+'\',false)">Удалить из списка</button><button class="danger" onclick="removeSource(\''+js(s.id)+'\',true)">Удалить с данными</button></div></td></tr>').join('')}
+function renderSources(){const body=document.getElementById('sources-body');body.innerHTML=sources.map(s=>'<tr><td><b>'+esc(s.id)+'</b></td><td>'+esc(s.type)+'</td><td>'+esc(s.entity_ref)+'</td><td>'+esc(s.title)+'</td><td>'+sourceStatus(s)+'</td><td><div class="actions"><button class="secondary" onclick="syncSource(\''+js(s.id)+'\',0)">Обновить</button><button class="secondary" onclick="syncSource(\''+js(s.id)+'\',20)">Загрузить последние 20</button><button class="danger" onclick="removeSource(\''+js(s.id)+'\',false)">Удалить из списка</button><button class="danger" onclick="removeSource(\''+js(s.id)+'\',true)">Удалить с данными</button></div></td></tr>').join('')}
 function renderSourceSelects(){const select=document.getElementById('message-source');const current=select.value;select.innerHTML='<option value="">all</option>'+sources.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.id)+'</option>').join('');select.value=current}
 async function saveSource(){const payload={id:document.getElementById('source-id').value.trim(),type:document.getElementById('source-type').value,entity_ref:document.getElementById('source-entity').value.trim(),public_username:document.getElementById('source-public').value.trim(),title:document.getElementById('source-title').value.trim(),enabled:document.getElementById('source-enabled').value==='true'};await api('/admin/api/sources',{method:'POST',body:JSON.stringify(payload)});show('Источник сохранён');await loadSources()}
 async function importSources(){const raw=document.getElementById('sources-import-json').value.trim();if(!raw)return show('Вставь JSON с channels/groups',true);let parsed;try{parsed=JSON.parse(raw)}catch(err){return show('Некорректный JSON: '+err.message,true)}const data=await api('/admin/api/sources/import',{method:'POST',body:JSON.stringify(parsed)});show('Импортировано: '+(data.imported||0)+', пропущено: '+(data.skipped||0));await loadSources()}

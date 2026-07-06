@@ -26,9 +26,10 @@ var (
 
 // SyncOptions controls Telegram source sync behavior.
 type SyncOptions struct {
-	SourceID string
-	Limit    int
-	Backfill int
+	SourceID        string
+	Limit           int
+	Backfill        int
+	StopOnFloodWait bool
 }
 
 // SyncRepos contains storage dependencies for sync.
@@ -98,6 +99,9 @@ func (c *Client) SyncSources(ctx context.Context, items []domain.Source, repos S
 		for _, source := range items {
 			syncResult := syncOneSource(ctx, api, peerManager, source, repos, limit, backfill)
 			result = append(result, syncResult)
+			if options.StopOnFloodWait && isFloodWaitError(syncResult.Error) {
+				break
+			}
 		}
 
 		return nil
@@ -626,6 +630,10 @@ func normalizeUsername(value string) string {
 	value = strings.TrimSpace(value)
 	value = strings.TrimPrefix(value, "@")
 	return strings.ToLower(value)
+}
+
+func isFloodWaitError(value string) bool {
+	return strings.Contains(value, "FLOOD_WAIT")
 }
 
 func normalizeSyncLimit(limit int) int {

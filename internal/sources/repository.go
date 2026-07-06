@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/bogachenko/telegram-mcp-server/internal/domain"
 )
@@ -69,7 +70,7 @@ func (r *Repository) Get(ctx context.Context, id string) (domain.Source, bool, e
 		return domain.Source{}, false, fmt.Errorf("source repository is required")
 	}
 
-	row := r.db.QueryRowContext(ctx, `SELECT id, type, entity_ref, public_username, title, enabled FROM sources WHERE id = ?`, id)
+	row := r.db.QueryRowContext(ctx, selectSourcesSQL()+` WHERE id = ?`, id)
 	source, err := scanSource(row)
 	if err == nil {
 		return source, true, nil
@@ -86,7 +87,7 @@ func (r *Repository) List(ctx context.Context) ([]domain.Source, error) {
 		return nil, fmt.Errorf("source repository is required")
 	}
 
-	rows, err := r.db.QueryContext(ctx, `SELECT id, type, entity_ref, public_username, title, enabled FROM sources ORDER BY title, id`)
+	rows, err := r.db.QueryContext(ctx, selectSourcesSQL()+` ORDER BY title, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list sources: %w", err)
 	}
@@ -188,6 +189,68 @@ func (r *Repository) Purge(ctx context.Context, id string) (PurgeResult, error) 
 	return purged, nil
 }
 
+func selectSourcesSQL() string {
+	return `SELECT id, type, entity_ref, public_username, title, enabled,
+	       coalesce(last_error, ''), coalesce(last_error_at, ''), coalesce(error_count, 0), coalesce(paused_until, '')
+	       FROM sources`
+}
+
+// MarkHealthy clears watcher health state after a successful sync.
+func (r *Repository) MarkHealthy(ctx context.Context, id string) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("source repository is required")
+	}
+	if id == "" {
+		return fmt.Errorf("source id is required")
+	}
+
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE sources
+		 SET last_error = NULL,
+		     last_error_at = NULL,
+		     error_count = 0,
+		     paused_until = NULL,
+		     updated_at = datetime('now')
+		 WHERE id = ?`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark source healthy: %w", err)
+	}
+	return nil
+}
+
+// MarkUnhealthy records watcher failure state and can disable a broken source.
+func (r *Repository) MarkUnhealthy(ctx context.Context, id string, message string, pausedUntil time.Time, disable bool) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("source repository is required")
+	}
+	if id == "" {
+		return fmt.Errorf("source id is required")
+	}
+
+	_, err := r.db.ExecContext(
+		ctx,
+		`UPDATE sources
+		 SET last_error = ?,
+		     last_error_at = datetime('now'),
+		     error_count = coalesce(error_count, 0) + 1,
+		     paused_until = ?,
+		     enabled = CASE WHEN ? THEN 0 ELSE enabled END,
+		     updated_at = datetime('now')
+		 WHERE id = ?`,
+		nullString(message),
+		nullTime(pausedUntil),
+		boolInt(disable),
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("mark source unhealthy: %w", err)
+	}
+	return nil
+}
+
 type sourceScanner interface {
 	Scan(dest ...any) error
 }
@@ -197,9 +260,24 @@ func scanSource(scanner sourceScanner) (domain.Source, error) {
 	var sourceType string
 	var publicUsername sql.NullString
 	var title sql.NullString
+	var lastError sql.NullString
+	var lastErrorAt sql.NullString
+	var errorCount int
+	var pausedUntil sql.NullString
 	var enabled int
 
-	if err := scanner.Scan(&source.ID, &sourceType, &source.EntityRef, &publicUsername, &title, &enabled); err != nil {
+	if err := scanner.Scan(
+		&source.ID,
+		&sourceType,
+		&source.EntityRef,
+		&publicUsername,
+		&title,
+		&enabled,
+		&lastError,
+		&lastErrorAt,
+		&errorCount,
+		&pausedUntil,
+	); err != nil {
 		return domain.Source{}, err
 	}
 
@@ -207,9 +285,12 @@ func scanSource(scanner sourceScanner) (domain.Source, error) {
 	source.PublicUsername = publicUsername.String
 	source.Title = title.String
 	source.Enabled = enabled != 0
+	source.LastError = lastError.String
+	source.LastErrorAt = parseTime(lastErrorAt.String)
+	source.ErrorCount = errorCount
+	source.PausedUntil = parseTime(pausedUntil.String)
 	return source, nil
 }
-
 func nullString(value string) sql.NullString {
 	if value == "" {
 		return sql.NullString{}
@@ -222,4 +303,24 @@ func boolInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func nullTime(value time.Time) sql.NullString {
+	if value.IsZero() {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: value.UTC().Format(time.RFC3339), Valid: true}
+}
+
+func parseTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
 }
