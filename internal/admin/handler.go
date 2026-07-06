@@ -811,6 +811,7 @@ const adminHTML = `<!doctype html>
   </div>
   <div class="row">
     <button id="tab-sources" onclick="showAdminPage('sources')">Чаты</button>
+    <button id="tab-health" class="secondary" onclick="showAdminPage('health')">Проблемы</button>
     <button id="tab-messages" class="secondary" onclick="showAdminPage('messages')">Сообщения и spam-list</button>
   </div>
 </div>
@@ -819,6 +820,28 @@ const adminHTML = `<!doctype html>
 <div class="row" style="margin-top:12px"><button onclick="saveSource()">Добавить / обновить</button><button class="secondary" onclick="loadAll()">Обновить</button><button class="secondary" onclick="syncAll()">Обновить все</button></div>
 <div style="margin-top:16px"><label>Массовый импорт JSON<textarea id="sources-import-json" placeholder='{"channels":[...],"groups":[...]}'></textarea></label><div class="row" style="margin-top:10px"><button class="secondary" onclick="importSources()">Импортировать JSON</button><span class="small">Поддерживает массивы channels и groups.</span></div></div>
 <div style="overflow:auto;margin-top:14px"><table><thead><tr><th>ID</th><th>Тип</th><th>Entity</th><th>Title</th><th>Статус</th><th>Действия</th></tr></thead><tbody id="sources-body"></tbody></table></div></section>
+<section id="admin-page-health" class="card admin-page" style="display:none">
+<h2>Проблемы источников</h2>
+<div class="small">Временные паузы FLOOD_WAIT, отключенные источники и накопленные ошибки. Данные берутся из таблицы sources.</div>
+<div class="row" style="margin-top:12px">
+  <button class="secondary" onclick="loadAll()">Обновить</button>
+  <button class="secondary" onclick="setHealthFilter('paused')">Только paused</button>
+  <button class="secondary" onclick="setHealthFilter('disabled')">Только disabled</button>
+  <button class="secondary" onclick="setHealthFilter('errors')">С ошибками</button>
+  <button class="secondary" onclick="setHealthFilter('all')">Все проблемные</button>
+</div>
+<div class="form-grid" style="margin-top:14px">
+  <div class="card" style="box-shadow:none"><div class="small">Paused сейчас</div><h2 id="health-paused-count" style="margin:4px 0 0">0</h2></div>
+  <div class="card" style="box-shadow:none"><div class="small">Disabled</div><h2 id="health-disabled-count" style="margin:4px 0 0">0</h2></div>
+  <div class="card" style="box-shadow:none"><div class="small">С ошибками</div><h2 id="health-error-count" style="margin:4px 0 0">0</h2></div>
+</div>
+<div style="overflow:auto;margin-top:14px">
+  <table>
+    <thead><tr><th>Статус</th><th>ID / Title</th><th>Тип</th><th>Ошибок</th><th>Paused until</th><th>Last error</th><th>Действия</th></tr></thead>
+    <tbody id="health-body"></tbody>
+  </table>
+</div>
+</section>
 <section id="admin-page-messages" class="grid admin-page" style="display:none">
 <div class="card"><h2>Сообщения</h2><div class="form-grid"><label>Source<select id="message-source"></select></label><label>Label<select id="message-label"><option value="">all</option><option value="POST">POST</option><option value="COMMENT">COMMENT</option></select></label><label>Limit<input id="message-limit" type="number" value="30" min="1" max="200"></label></div><div class="row" style="margin-top:10px"><input id="message-query" placeholder="Поиск по тексту" style="flex:1;min-width:220px"><button onclick="loadRecent()">Последние</button><button class="secondary" onclick="searchMessages()">Искать</button></div><div id="messages" class="messages" style="margin-top:12px"></div></div>
 <div class="card"><h2>Spam list</h2><div class="form-grid"><label>Sender ID<input id="spam-sender-id" placeholder="8303990114"></label><label>Username<input id="spam-username" placeholder="@username"></label><label>Scope<select id="spam-scope"><option value="global">global</option><option value="source">source</option></select></label><label>Source ID<input id="spam-source-id" placeholder="mpwb_chat"></label><label style="grid-column:span 2;">Reason<input id="spam-reason" placeholder="spam / irrelevant / noisy"></label></div><div class="row" style="margin-top:10px"><button onclick="addSpamSender()">Добавить в спам</button><button class="secondary" onclick="loadSpam()">Обновить</button></div><div style="overflow:auto;margin-top:14px"><table><thead><tr><th>Sender</th><th>Scope</th><th>Reason</th><th>Действия</th></tr></thead><tbody id="spam-body"></tbody></table></div></div>
@@ -827,18 +850,19 @@ const adminHTML = `<!doctype html>
 <div id="status" class="status"></div>
 <script>
 let sources=[];
+let healthFilter='all';
 function showAdminPage(page){
-  const sourcesPage=document.getElementById('admin-page-sources');
-  const messagesPage=document.getElementById('admin-page-messages');
-  const sourcesTab=document.getElementById('tab-sources');
-  const messagesTab=document.getElementById('tab-messages');
+  const pages=['sources','health','messages'];
+  pages.forEach(name=>{
+    const node=document.getElementById('admin-page-'+name);
+    const tab=document.getElementById('tab-'+name);
+    if(node)node.style.display=page===name?'':'none';
+    if(tab)tab.className=page===name?'':'secondary';
+  });
 
-  if(sourcesPage)sourcesPage.style.display=page==='sources'?'':'none';
-  if(messagesPage)messagesPage.style.display=page==='messages'?'':'none';
-
-  if(sourcesTab)sourcesTab.className=page==='sources'?'':'secondary';
-  if(messagesTab)messagesTab.className=page==='messages'?'':'secondary';
-
+  if(page==='health'){
+    renderHealth();
+  }
   if(page==='messages'){
     loadRecent().catch(err=>show(err.message,true));
     loadSpam().catch(err=>show(err.message,true));
@@ -859,9 +883,62 @@ function sourceStatus(s){
   return html;
 }
 async function loadAll(){await loadSources()}
-async function loadSources(){const data=await api('/admin/api/sources');sources=data.sources||[];renderSources();renderSourceSelects()}
+async function loadSources(){const data=await api('/admin/api/sources');sources=data.sources||[];renderSources();renderSourceSelects();renderHealth()}
 function renderSources(){const body=document.getElementById('sources-body');body.innerHTML=sources.map(s=>'<tr><td><b>'+esc(s.id)+'</b></td><td>'+esc(s.type)+'</td><td>'+esc(s.entity_ref)+'</td><td>'+esc(s.title)+'</td><td>'+sourceStatus(s)+'</td><td><div class="actions"><button class="secondary" onclick="syncSource(\''+js(s.id)+'\',0)">Обновить</button><button class="secondary" onclick="syncSource(\''+js(s.id)+'\',20)">Загрузить последние 20</button><button class="danger" onclick="removeSource(\''+js(s.id)+'\',false)">Удалить из списка</button><button class="danger" onclick="removeSource(\''+js(s.id)+'\',true)">Удалить с данными</button></div></td></tr>').join('')}
 function renderSourceSelects(){const select=document.getElementById('message-source');const current=select.value;select.innerHTML='<option value="">all</option>'+sources.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.id)+'</option>').join('');select.value=current}
+function sourcePausedNow(s){
+  if(!s.paused_until)return false;
+  const ts=Date.parse(s.paused_until);
+  return Number.isFinite(ts)&&ts>Date.now();
+}
+function sourceHealthStatus(s){
+  if(!s.enabled)return 'disabled';
+  if(sourcePausedNow(s))return 'paused';
+  if(Number(s.error_count||0)>0)return 'errors';
+  return 'ok';
+}
+function healthStatusLabel(status){
+  if(status==='paused')return 'paused';
+  if(status==='disabled')return 'disabled';
+  if(status==='errors')return 'has_errors';
+  return 'ok';
+}
+function setHealthFilter(value){
+  healthFilter=value||'all';
+  renderHealth();
+}
+function renderHealth(){
+  const body=document.getElementById('health-body');
+  if(!body)return;
+  const paused=sources.filter(sourcePausedNow).length;
+  const disabled=sources.filter(s=>!s.enabled).length;
+  const withErrors=sources.filter(s=>Number(s.error_count||0)>0).length;
+  const setText=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=String(value)};
+  setText('health-paused-count',paused);
+  setText('health-disabled-count',disabled);
+  setText('health-error-count',withErrors);
+
+  const problemItems=sources.filter(s=>{
+    const status=sourceHealthStatus(s);
+    if(status==='ok')return false;
+    if(healthFilter==='all')return true;
+    if(healthFilter==='errors')return Number(s.error_count||0)>0;
+    return status===healthFilter;
+  }).sort((a,b)=>{
+    const order={paused:1,disabled:2,errors:3,ok:4};
+    const sa=sourceHealthStatus(a), sb=sourceHealthStatus(b);
+    if(order[sa]!==order[sb])return order[sa]-order[sb];
+    return String(a.paused_until||'').localeCompare(String(b.paused_until||''));
+  });
+
+  body.innerHTML=problemItems.map(s=>{
+    const status=sourceHealthStatus(s);
+    const title=s.title?'<div class="small">'+esc(s.title)+'</div>':'';
+    const lastError=s.last_error?esc(s.last_error):'<span class="small">—</span>';
+    const paused=s.paused_until?esc(s.paused_until):'<span class="small">—</span>';
+    return '<tr><td><span class="pill">'+esc(healthStatusLabel(status))+'</span></td><td><b>'+esc(s.id)+'</b>'+title+'</td><td>'+esc(s.type)+'</td><td>'+esc(s.error_count||0)+'</td><td>'+paused+'</td><td style="max-width:420px">'+lastError+'</td><td><div class="actions"><button class="secondary" onclick="syncSource(''+js(s.id)+'',0)">Проверить</button></div></td></tr>';
+  }).join('')||'<tr><td colspan="7" class="small">Проблемных источников нет</td></tr>';
+}
 async function saveSource(){const payload={id:document.getElementById('source-id').value.trim(),type:document.getElementById('source-type').value,entity_ref:document.getElementById('source-entity').value.trim(),public_username:document.getElementById('source-public').value.trim(),title:document.getElementById('source-title').value.trim(),enabled:document.getElementById('source-enabled').value==='true'};await api('/admin/api/sources',{method:'POST',body:JSON.stringify(payload)});show('Источник сохранён');await loadSources()}
 async function importSources(){const raw=document.getElementById('sources-import-json').value.trim();if(!raw)return show('Вставь JSON с channels/groups',true);let parsed;try{parsed=JSON.parse(raw)}catch(err){return show('Некорректный JSON: '+err.message,true)}const data=await api('/admin/api/sources/import',{method:'POST',body:JSON.stringify(parsed)});show('Импортировано: '+(data.imported||0)+', пропущено: '+(data.skipped||0));await loadSources()}
 async function removeSource(id,purge){if(!confirm((purge?'Удалить источник вместе с messages/state/source-spam? ':'')+id))return;const data=await api('/admin/api/sources/'+encodeURIComponent(id)+'?purge='+purge,{method:'DELETE'});show(purge?('Удалено с данными, messages: '+(data.messages||0)):'Источник удалён из списка');await loadAll()}
